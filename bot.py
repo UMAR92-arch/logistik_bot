@@ -1,5 +1,7 @@
 import logging
 import sqlite3
+import os
+import psycopg2
 from datetime import datetime
 from telegram import (
     Update,
@@ -48,60 +50,113 @@ logger = logging.getLogger(__name__)
 ) = range(11)
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
-def init_db():
-    conn = sqlite3.connect("logistics.db")
+DB_URL = os.environ.get("DATABASE_URL")
+
+def get_db_connection():
+    if DB_URL:
+        # Railway gives postgres:// which SQLAlchemy doesn't like, but psycopg2 is fine with it.
+        return psycopg2.connect(DB_URL)
+    return sqlite3.connect("logistics.db")
+
+def run_query(query, params=(), fetch=None, fetchall=False, return_id=False):
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id     INTEGER PRIMARY KEY,
-            username    TEXT,
-            full_name   TEXT,
-            phone       TEXT,
-            role        TEXT,
-            created_at  TEXT,
-            updated_at  TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS payments (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            payer_id    INTEGER,
-            target_id   INTEGER,
-            amount      INTEGER,
-            card_holder TEXT,
-            status      TEXT DEFAULT 'pending',
-            created_at  TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    
+    # SQLite uses ?, PostgreSQL uses %s
+    if DB_URL:
+        query = query.replace("?", "%s")
+        # PostgreSQL AUTOINCREMENT logic for returning ID
+        if return_id and "INSERT" in query:
+            query += " RETURNING id"
+            
+    try:
+        c.execute(query, params)
+        result = None
+        if fetch:
+            result = c.fetchone()
+        elif fetchall:
+            result = c.fetchall()
+        elif return_id:
+            if DB_URL:
+                result = c.fetchone()[0]
+            else:
+                result = c.lastrowid
+        conn.commit()
+    finally:
+        c.close()
+        conn.close()
+    
+    return result
+
+def init_db():
+    if DB_URL:
+        # PostgreSQL schema
+        run_query("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id     BIGINT PRIMARY KEY,
+                username    VARCHAR(255),
+                full_name   VARCHAR(255),
+                phone       VARCHAR(50),
+                role        VARCHAR(50),
+                created_at  VARCHAR(50),
+                updated_at  VARCHAR(50)
+            )
+        """)
+        run_query("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id          SERIAL PRIMARY KEY,
+                payer_id    BIGINT,
+                target_id   BIGINT,
+                amount      INTEGER,
+                card_holder VARCHAR(255),
+                status      VARCHAR(50) DEFAULT 'pending',
+                created_at  VARCHAR(50)
+            )
+        """)
+    else:
+        # SQLite schema
+        run_query("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id     INTEGER PRIMARY KEY,
+                username    TEXT,
+                full_name   TEXT,
+                phone       TEXT,
+                role        TEXT,
+                created_at  TEXT,
+                updated_at  TEXT
+            )
+        """)
+        run_query("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                payer_id    INTEGER,
+                target_id   INTEGER,
+                amount      INTEGER,
+                card_holder TEXT,
+                status      TEXT DEFAULT 'pending',
+                created_at  TEXT
+            )
+        """)
 
 
 def upsert_user(user_id, username, full_name, phone, role):
-    conn = sqlite3.connect("logistics.db")
-    c = conn.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-    if c.fetchone():
-        c.execute("""
+    row = run_query("SELECT user_id FROM users WHERE user_id = ?", (user_id,), fetch=True)
+    
+    if row:
+        run_query("""
             UPDATE users SET username=?, full_name=?, phone=?, role=?, updated_at=?
             WHERE user_id=?
         """, (username, full_name, phone, role, now, user_id))
     else:
-        c.execute("""
+        run_query("""
             INSERT INTO users (user_id, username, full_name, phone, role, created_at, updated_at)
             VALUES (?,?,?,?,?,?,?)
         """, (user_id, username, full_name, phone, role, now, now))
-    conn.commit()
-    conn.close()
 
 
 def get_user(user_id):
-    conn = sqlite3.connect("logistics.db")
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    conn.close()
+    row = run_query("SELECT * FROM users WHERE user_id = ?", (user_id,), fetch=True)
     if row:
         cols = ["user_id", "username", "full_name", "phone", "role", "created_at", "updated_at"]
         return dict(zip(cols, row))
@@ -110,46 +165,29 @@ def get_user(user_id):
 
 def search_opposite(role):
     opposite = "worker" if role == "employer" else "employer"
-    conn = sqlite3.connect("logistics.db")
-    c = conn.cursor()
-    c.execute("""
+    rows = run_query("""
         SELECT user_id, full_name, phone, username
         FROM users WHERE role=?
         ORDER BY updated_at DESC LIMIT 10
-    """, (opposite,))
-    rows = c.fetchall()
-    conn.close()
+    """, (opposite,), fetchall=True)
     return rows
 
 
 def save_payment(payer_id, target_id, amount, card_holder):
-    conn = sqlite3.connect("logistics.db")
-    c = conn.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("""
+    pay_id = run_query("""
         INSERT INTO payments (payer_id, target_id, amount, card_holder, status, created_at)
         VALUES (?,?,?,?,'pending',?)
-    """, (payer_id, target_id, amount, card_holder, now))
-    pay_id = c.lastrowid
-    conn.commit()
-    conn.close()
+    """, (payer_id, target_id, amount, card_holder, now), return_id=True)
     return pay_id
 
 
 def confirm_payment(pay_id):
-    conn = sqlite3.connect("logistics.db")
-    c = conn.cursor()
-    c.execute("UPDATE payments SET status='confirmed' WHERE id=?", (pay_id,))
-    conn.commit()
-    conn.close()
+    run_query("UPDATE payments SET status='confirmed' WHERE id=?", (pay_id,))
 
 
 def get_payment(pay_id):
-    conn = sqlite3.connect("logistics.db")
-    c = conn.cursor()
-    c.execute("SELECT * FROM payments WHERE id=?", (pay_id,))
-    row = c.fetchone()
-    conn.close()
+    row = run_query("SELECT * FROM payments WHERE id=?", (pay_id,), fetch=True)
     if row:
         cols = ["id", "payer_id", "target_id", "amount", "card_holder", "status", "created_at"]
         return dict(zip(cols, row))
@@ -157,12 +195,9 @@ def get_payment(pay_id):
 
 
 def update_user_field(user_id, field, value):
-    conn = sqlite3.connect("logistics.db")
-    c = conn.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute(f"UPDATE users SET {field}=?, updated_at=? WHERE user_id=?", (value, now, user_id))
-    conn.commit()
-    conn.close()
+    # field is safe because we only use it for 'full_name' or 'phone' internally
+    run_query(f"UPDATE users SET {field}=?, updated_at=? WHERE user_id=?", (value, now, user_id))
 
 
 # ─── KLAVIATURALAR ─────────────────────────────────────────────────────────────
