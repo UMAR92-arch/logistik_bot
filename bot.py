@@ -1,7 +1,8 @@
 import logging
 import sqlite3
 import os
-import psycopg2
+import urllib.parse
+import pg8000.dbapi
 from datetime import datetime
 from telegram import (
     Update,
@@ -54,8 +55,15 @@ DB_URL = os.environ.get("DATABASE_URL")
 
 def get_db_connection():
     if DB_URL:
-        # Railway gives postgres:// which SQLAlchemy doesn't like, but psycopg2 is fine with it.
-        return psycopg2.connect(DB_URL)
+        # Parse URL for pg8000
+        url = urllib.parse.urlparse(DB_URL)
+        return pg8000.dbapi.connect(
+            user=url.username,
+            password=url.password,
+            host=url.hostname,
+            port=url.port or 5432,
+            database=url.path[1:]
+        )
     return sqlite3.connect("logistics.db")
 
 def run_query(query, params=(), fetch=None, fetchall=False, return_id=False):
