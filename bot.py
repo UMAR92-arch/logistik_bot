@@ -245,13 +245,17 @@ def after_register_keyboard(role):
 
 
 def cargo_types_keyboard():
-    cargos = ["Termos", "Tent", "Bortavoy", "Zil", "Gazel", "Labo", "Konteyner", "Boshqa"]
-    keyboard = []
-    for i in range(0, len(cargos), 2):
-        row = [KeyboardButton(cargos[i])]
-        if i + 1 < len(cargos):
-            row.append(KeyboardButton(cargos[i + 1]))
-        keyboard.append(row)
+    cargos = [
+        "1: Meva-sabzavot va oziq-ovqatlar (Muzlatgichli trucklar)",
+        "2: Tekstil va to'qimachilik mahsulotlari (Yopiq tentli trucklar)",
+        "3: Qurilish materiallari (Ochiq va yopiq trucklar)",
+        "4: Xo'jalik va kundalik iste'mol mollari (FMCG)",
+        "5: Maishiy texnika va elektronika (Yopiq va quruq trucklar)",
+        "6: Avtomobillar va ehtiyot qismlar (Avtovozlar va furalar)",
+        "7: Sanoat xomashyosi (Maxsus trucklar)",
+        "8: Stanoklar va og'ir texnikalar (Trallar)"
+    ]
+    keyboard = [[KeyboardButton(cargo)] for cargo in cargos]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
