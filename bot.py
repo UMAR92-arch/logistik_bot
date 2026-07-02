@@ -654,7 +654,10 @@ def main():
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, main_menu_handler)
+            MessageHandler(
+                filters.Regex("^(📦 Buyurtma berish|🚚 Buyurtma olish|🔍 Buyurtma oluvchini qidirish|🔍 Buyurtma beruvchini qidirish|✏️ Ma'lumotlarni tahrirlash|🏠 Bosh menyu)$"),
+                main_menu_handler
+            )
         ],
         per_message=False,
         states={
