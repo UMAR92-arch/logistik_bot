@@ -48,7 +48,9 @@ logger = logging.getLogger(__name__)
     EDIT_MENU,           # 8
     EDIT_NAME,           # 9
     EDIT_PHONE,          # 10
-) = range(11)
+    EMPLOYER_CARGO,      # 11
+    WORKER_CARGO,        # 12
+) = range(13)
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
 DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:kMhzsVPUhELJnKadPEDacSVCMxcegXWz@postgres.railway.internal:5432/railway")
@@ -110,6 +112,10 @@ def init_db():
                 updated_at  VARCHAR(50)
             )
         """)
+        try:
+            run_query("ALTER TABLE users ADD COLUMN cargo_type VARCHAR(255)")
+        except Exception:
+            pass
         run_query("""
             CREATE TABLE IF NOT EXISTS payments (
                 id          SERIAL PRIMARY KEY,
@@ -134,6 +140,10 @@ def init_db():
                 updated_at  TEXT
             )
         """)
+        try:
+            run_query("ALTER TABLE users ADD COLUMN cargo_type TEXT")
+        except Exception:
+            pass
         run_query("""
             CREATE TABLE IF NOT EXISTS payments (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,37 +157,43 @@ def init_db():
         """)
 
 
-def upsert_user(user_id, username, full_name, phone, role):
+def upsert_user(user_id, username, full_name, phone, role, cargo_type):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     row = run_query("SELECT user_id FROM users WHERE user_id = ?", (user_id,), fetch=True)
     
     if row:
         run_query("""
-            UPDATE users SET username=?, full_name=?, phone=?, role=?, updated_at=?
+            UPDATE users SET username=?, full_name=?, phone=?, role=?, cargo_type=?, updated_at=?
             WHERE user_id=?
-        """, (username, full_name, phone, role, now, user_id))
+        """, (username, full_name, phone, role, cargo_type, now, user_id))
     else:
         run_query("""
-            INSERT INTO users (user_id, username, full_name, phone, role, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?)
-        """, (user_id, username, full_name, phone, role, now, now))
+            INSERT INTO users (user_id, username, full_name, phone, role, cargo_type, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (user_id, username, full_name, phone, role, cargo_type, now, now))
 
 
 def get_user(user_id):
-    row = run_query("SELECT * FROM users WHERE user_id = ?", (user_id,), fetch=True)
+    row = run_query("SELECT user_id, username, full_name, phone, role, created_at, updated_at, cargo_type FROM users WHERE user_id = ?", (user_id,), fetch=True)
     if row:
-        cols = ["user_id", "username", "full_name", "phone", "role", "created_at", "updated_at"]
+        cols = ["user_id", "username", "full_name", "phone", "role", "created_at", "updated_at", "cargo_type"]
         return dict(zip(cols, row))
     return None
 
 
-def search_opposite(role):
+def get_total_users(role):
+    opposite = "worker" if role == "employer" else "employer"
+    row = run_query("SELECT COUNT(*) FROM users WHERE role=?", (opposite,), fetch=True)
+    return row[0] if row else 0
+
+
+def search_opposite(role, cargo_type):
     opposite = "worker" if role == "employer" else "employer"
     rows = run_query("""
-        SELECT user_id, full_name, phone, username
-        FROM users WHERE role=?
+        SELECT user_id, full_name, phone, username, cargo_type
+        FROM users WHERE role=? AND cargo_type=?
         ORDER BY updated_at DESC LIMIT 10
-    """, (opposite,), fetchall=True)
+    """, (opposite, cargo_type), fetchall=True)
     return rows
 
 
@@ -211,13 +227,13 @@ def update_user_field(user_id, field, value):
 # ─── KLAVIATURALAR ─────────────────────────────────────────────────────────────
 def main_menu_keyboard():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("💼 Ish berish"), KeyboardButton("🚛 Ish olish")]],
+        [[KeyboardButton("📦 Buyurtma berish"), KeyboardButton("🚚 Buyurtma olish")]],
         resize_keyboard=True,
     )
 
 
 def after_register_keyboard(role):
-    search_btn = "🔍 Ish oluvchini qidirish" if role == "employer" else "🔍 Ish beruvchini qidirish"
+    search_btn = "🔍 Buyurtma oluvchini qidirish" if role == "employer" else "🔍 Buyurtma beruvchini qidirish"
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton(search_btn)],
@@ -228,6 +244,17 @@ def after_register_keyboard(role):
     )
 
 
+def cargo_types_keyboard():
+    cargos = ["Termos", "Tent", "Bortavoy", "Zil", "Gazel", "Labo", "Konteyner", "Boshqa"]
+    keyboard = []
+    for i in range(0, len(cargos), 2):
+        row = [KeyboardButton(cargos[i])]
+        if i + 1 < len(cargos):
+            row.append(KeyboardButton(cargos[i + 1]))
+        keyboard.append(row)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
 # ─── /START ────────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -236,16 +263,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome = (
         f"🌟 *LogiConnect Botiga Xush Kelibsiz!* 🌟\n\n"
         f"Salom, *{user.first_name}*! 👋\n\n"
-        f"Men logistika sohasidagi *ish beruvchilar* va *ish oluvchilar* o'rtasidagi "
+        f"Men logistika sohasidagi *buyurtma beruvchilar* va *buyurtma oluvchilar* o'rtasidagi "
         f"muloqotni osonlashtiruvchi raqamli broker botman.\n\n"
-        f"✅ Ish beruvchi va oluvchilarni ulashaman\n"
+        f"✅ Buyurtma beruvchi va oluvchilarni ulashaman\n"
         f"✅ Tez va qulay qidirish\n"
         f"✅ Ma'lumotlar xavfsiz saqlanadi\n\n"
         f"Quyidan o'zingizga kerakli bo'limni tanlang 👇"
     )
 
     if existing:
-        role_label = "Ish beruvchi" if existing["role"] == "employer" else "Ish oluvchi"
+        role_label = "Buyurtma beruvchi" if existing["role"] == "employer" else "Buyurtma oluvchi"
         welcome += f"\n\n_(Siz avval *{role_label}* sifatida ro'yxatdan o'tgansiz)_"
         await update.message.reply_text(
             welcome,
@@ -265,71 +292,54 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
-    if text == "💼 Ish berish":
+    if text == "📦 Buyurtma berish":
         await update.message.reply_text(
-            "📝 *Ish berish bo'limi*\n\nBir nechta savol beramiz.\n\n"
+            "📝 *Buyurtma berish bo'limi*\n\nBir nechta savol beramiz.\n\n"
             "1️⃣ Ismingiz va familiyangizni kiriting:",
             reply_markup=ReplyKeyboardRemove(),
             parse_mode="Markdown",
         )
         return EMPLOYER_NAME
 
-    elif text == "🚛 Ish olish":
+    elif text == "🚚 Buyurtma olish":
         await update.message.reply_text(
-            "📝 *Ish olish bo'limi*\n\nBir nechta savol beramiz.\n\n"
+            "📝 *Buyurtma olish bo'limi*\n\nBir nechta savol beramiz.\n\n"
             "1️⃣ Ismingiz va familiyangizni kiriting:",
             reply_markup=ReplyKeyboardRemove(),
             parse_mode="Markdown",
         )
         return WORKER_NAME
 
-    elif text in ("🔍 Ish oluvchini qidirish", "🔍 Ish beruvchini qidirish"):
+    elif text in ("🔍 Buyurtma oluvchini qidirish", "🔍 Buyurtma beruvchini qidirish"):
         u = get_user(update.effective_user.id)
         if not u:
             await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz. /start bosing.")
             return MAIN_MENU
+            
         context.user_data["searching_as"] = u["role"]
-        results = search_opposite(u["role"])
-        if not results:
-            opposite_label = "ish oluvchi (haydovchi)" if u["role"] == "employer" else "ish beruvchi (shipper)"
-            await update.message.reply_text(
-                f"😔 Hozirda hech qanday *{opposite_label}* topilmadi.\n\nKeyinroq qayta urinib ko'ring.",
-                parse_mode="Markdown",
-                reply_markup=after_register_keyboard(u["role"]),
-            )
-            return MAIN_MENU
-
-        # Topildi — to'lov talab qilamiz
-        target = results[0]
-        target_id = target[0]
-        context.user_data["target_id"] = target_id
-
-        opposite_label = "Ish oluvchi (haydovchi)" if u["role"] == "employer" else "Ish beruvchi (shipper)"
+        total_count = get_total_users(u["role"])
+        opposite_label = "buyurtma oluvchi (haydovchi)" if u["role"] == "employer" else "buyurtma beruvchi (shipper)"
+        
         await update.message.reply_text(
-            f"✅ *{opposite_label} topildi!*\n\n"
-            f"Uning to'liq ma'lumotlarini olish uchun botga to'lov qiling.\n\n"
-            f"💳 *To'lov miqdori:* {PAYMENT_AMOUNT:,} UZS\n"
-            f"💳 *Karta raqami:* `{PAYMENT_CARD}`\n\n"
-            f"❗ *Iltimos:*\n"
-            f"1. Yuqoridagi kartaga *naqd {PAYMENT_AMOUNT:,} UZS* o'tkazing\n"
-            f"2. To'lovni amalga oshirgach, quyida *karta raqamingizda yozilgan ism va familiyangizni* yozing\n\n"
-            f"_(Masalan: Alisher Karimov)_",
+            f"📊 *Ma'lumot:* Hozirda botda jami *{total_count}* ta {opposite_label} bor.\n\n"
+            "Qaysi turdagi yuk bo'yicha qidiryapsiz? Quydagi menyudan tanlang 👇",
             parse_mode="Markdown",
-            reply_markup=ReplyKeyboardRemove(),
+            reply_markup=cargo_types_keyboard(),
         )
-        return AWAIT_PAYMENT
+        return SEARCH_CARGO
 
     elif text == "✏️ Ma'lumotlarni tahrirlash":
         u = get_user(update.effective_user.id)
         if not u:
             await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz.")
             return MAIN_MENU
-        role_label = "💼 Ish beruvchi" if u["role"] == "employer" else "🚛 Ish oluvchi"
+        role_label = "📦 Buyurtma beruvchi" if u["role"] == "employer" else "🚚 Buyurtma oluvchi"
         await update.message.reply_text(
             f"✏️ *Ma'lumotlarni tahrirlash*\n\n"
             f"👤 Ism: {u['full_name']}\n"
             f"📞 Telefon: {u['phone']}\n"
-            f"🏷️ Rol: {role_label}\n\n"
+            f"🏷️ Rol: {role_label}\n"
+            f"📦 Yuk turi: {u.get('cargo_type', 'Kiritilmagan')}\n\n"
             "Nimani tahrirlashni istaysiz?",
             reply_markup=ReplyKeyboardMarkup(
                 [
@@ -354,7 +364,45 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MAIN_MENU
 
 
-# ═══ ISH BERISH (EMPLOYER) ═════════════════════════════════════════════════════
+async def search_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cargo_type = update.message.text.strip()
+    u = get_user(update.effective_user.id)
+    if not u:
+        await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz.")
+        return MAIN_MENU
+
+    results = search_opposite(u["role"], cargo_type)
+    opposite_label = "Buyurtma oluvchi (haydovchi)" if u["role"] == "employer" else "Buyurtma beruvchi (shipper)"
+    
+    if not results:
+        await update.message.reply_text(
+            f"😔 Hozirda *{cargo_type}* turdagi yuk bo'yicha hech qanday *{opposite_label.lower()}* topilmadi.\n\nKeyinroq qayta urinib ko'ring.",
+            parse_mode="Markdown",
+            reply_markup=after_register_keyboard(u["role"]),
+        )
+        return MAIN_MENU
+
+    # Topildi — to'lov talab qilamiz
+    target = results[0]
+    target_id = target[0]
+    context.user_data["target_id"] = target_id
+    context.user_data["target_cargo"] = cargo_type
+
+    await update.message.reply_text(
+        f"✅ *{cargo_type} bo'yicha {opposite_label} topildi!*\n\n"
+        f"Uning to'liq ma'lumotlarini olish uchun botga to'lov qiling.\n\n"
+        f"💳 *To'lov miqdori:* {PAYMENT_AMOUNT:,} UZS\n"
+        f"💳 *Karta raqami:* `{PAYMENT_CARD}`\n\n"
+        f"❗ *Iltimos:*\n"
+        f"1. Yuqoridagi kartaga *naqd {PAYMENT_AMOUNT:,} UZS* o'tkazing\n"
+        f"2. To'lovni amalga oshirgach, quyida *karta raqamingizda yozilgan ism va familiyangizni* yozing\n\n"
+        f"_(Masalan: Alisher Karimov)_",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    return AWAIT_PAYMENT
+
+# ═══ BUYURTMA BERISH (EMPLOYER) ═════════════════════════════════════════════════════
 async def employer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["emp_name"] = update.message.text.strip()
     await update.message.reply_text("2️⃣ Telefon raqamingizni kiriting (masalan: +998901234567):")
@@ -362,22 +410,35 @@ async def employer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def employer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.text.strip()
+    context.user_data["emp_phone"] = update.message.text.strip()
+    await update.message.reply_text(
+        "3️⃣ Asosan qaysi turdagi yuklarni berasiz? (Quyidagilardan birini tanlang):",
+        reply_markup=cargo_types_keyboard(),
+    )
+    return EMPLOYER_CARGO
+
+
+async def employer_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cargo_type = update.message.text.strip()
     user = update.effective_user
-    upsert_user(user.id, user.username, context.user_data["emp_name"], phone, "employer")
+    name = context.user_data.get("emp_name", "Noma'lum")
+    phone = context.user_data.get("emp_phone", "Noma'lum")
+    
+    upsert_user(user.id, user.username, name, phone, "employer", cargo_type)
     await update.message.reply_text(
         "✅ *Tabriklaymiz! Muvaffaqiyatli ro'yxatdan o'tdingiz!*\n\n"
-        f"👤 Ism: {context.user_data['emp_name']}\n"
+        f"👤 Ism: {name}\n"
         f"📞 Telefon: {phone}\n"
-        f"🏷️ Rol: 💼 Ish beruvchi\n\n"
-        "Endi haydovchi (ish oluvchi) qidirish yoki boshqa amallarni bajarishingiz mumkin 👇",
+        f"🏷️ Rol: 📦 Buyurtma beruvchi\n"
+        f"📦 Yuk turi: {cargo_type}\n\n"
+        "Endi buyurtma oluvchini (haydovchini) qidirish yoki boshqa amallarni bajarishingiz mumkin 👇",
         reply_markup=after_register_keyboard("employer"),
         parse_mode="Markdown",
     )
     return MAIN_MENU
 
 
-# ═══ ISH OLISH (WORKER) ════════════════════════════════════════════════════════
+# ═══ BUYURTMA OLISH (WORKER) ════════════════════════════════════════════════════════
 async def worker_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["wrk_name"] = update.message.text.strip()
     await update.message.reply_text("2️⃣ Telefon raqamingizni kiriting (masalan: +998901234567):")
@@ -385,15 +446,28 @@ async def worker_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def worker_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.text.strip()
+    context.user_data["wrk_phone"] = update.message.text.strip()
+    await update.message.reply_text(
+        "3️⃣ Asosan qaysi turdagi yuklarni yetkazib berasiz? (Quyidagilardan birini tanlang):",
+        reply_markup=cargo_types_keyboard(),
+    )
+    return WORKER_CARGO
+
+
+async def worker_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cargo_type = update.message.text.strip()
     user = update.effective_user
-    upsert_user(user.id, user.username, context.user_data["wrk_name"], phone, "worker")
+    name = context.user_data.get("wrk_name", "Noma'lum")
+    phone = context.user_data.get("wrk_phone", "Noma'lum")
+    
+    upsert_user(user.id, user.username, name, phone, "worker", cargo_type)
     await update.message.reply_text(
         "✅ *Tabriklaymiz! Muvaffaqiyatli ro'yxatdan o'tdingiz!*\n\n"
-        f"👤 Ism: {context.user_data['wrk_name']}\n"
+        f"👤 Ism: {name}\n"
         f"📞 Telefon: {phone}\n"
-        f"🏷️ Rol: 🚛 Ish oluvchi\n\n"
-        "Endi ish beruvchi (shipper) qidirish yoki boshqa amallarni bajarishingiz mumkin 👇",
+        f"🏷️ Rol: 🚚 Buyurtma oluvchi\n"
+        f"📦 Yuk turi: {cargo_type}\n\n"
+        "Endi buyurtma beruvchini (shipper) qidirish yoki boshqa amallarni bajarishingiz mumkin 👇",
         reply_markup=after_register_keyboard("worker"),
         parse_mode="Markdown",
     )
@@ -427,7 +501,8 @@ async def await_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("❌ Rad etish", callback_data=f"pay_no|{pay_id}"),
                 ]
             ])
-            opposite_label = "Ish oluvchi" if role == "employer" else "Ish beruvchi"
+            opposite_label = "Buyurtma oluvchi" if role == "employer" else "Buyurtma beruvchi"
+            target_cargo = context.user_data.get("target_cargo", "Noma'lum")
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
@@ -437,7 +512,7 @@ async def await_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"📞 Telefon: {payer_phone}\n"
                     f"💳 Karta egasi (to'lovchi ko'rsatgan): {card_holder}\n"
                     f"💵 Miqdor: {PAYMENT_AMOUNT:,} UZS\n"
-                    f"🔍 Qidirilgan: {opposite_label}\n\n"
+                    f"🔍 Qidirilgan: {opposite_label} ({target_cargo})\n\n"
                     f"Kartangizda ushbu ismdan {PAYMENT_AMOUNT:,} UZS tushganini tekshiring va tasdiqlang."
                 ),
                 parse_mode="Markdown",
@@ -487,13 +562,14 @@ async def admin_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
 
         if target:
             role = payer["role"] if payer else "employer"
-            opposite_label = "Ish oluvchi (Haydovchi)" if role == "employer" else "Ish beruvchi (Shipper)"
+            opposite_label = "Buyurtma oluvchi (Haydovchi)" if role == "employer" else "Buyurtma beruvchi (Shipper)"
             uname = f"@{target['username']}" if target.get("username") else "Telegram username yo'q"
             msg = (
                 f"✅ *To'lovingiz tasdiqlandi!*\n\n"
                 f"🎉 *{opposite_label} ma'lumotlari:*\n\n"
                 f"👤 Ism: *{target['full_name']}*\n"
                 f"📞 Telefon: `{target['phone']}`\n"
+                f"📦 Yuk turi: {target.get('cargo_type', 'Kiritilmagan')}\n"
                 f"🔗 Telegram: {uname}\n\n"
                 f"Muvaffaqiyatli hamkorlik tilaymiz! 🤝"
             )
@@ -580,8 +656,11 @@ def main():
             ],
             EMPLOYER_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, employer_name)],
             EMPLOYER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, employer_phone)],
+            EMPLOYER_CARGO: [MessageHandler(filters.TEXT & ~filters.COMMAND, employer_cargo)],
             WORKER_NAME:    [MessageHandler(filters.TEXT & ~filters.COMMAND, worker_name)],
             WORKER_PHONE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, worker_phone)],
+            WORKER_CARGO:   [MessageHandler(filters.TEXT & ~filters.COMMAND, worker_cargo)],
+            SEARCH_CARGO:   [MessageHandler(filters.TEXT & ~filters.COMMAND, search_cargo)],
             AWAIT_PAYMENT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, await_payment)],
             EDIT_MENU:      [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_menu_handler)],
             EDIT_NAME:      [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_name)],
