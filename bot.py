@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 ) = range(11)
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
-DB_URL = os.environ.get("DATABASE_URL")
+DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:kMhzsVPUhELJnKadPEDacSVCMxcegXWz@postgres.railway.internal:5432/railway")
 
 def get_db_connection():
     if DB_URL:
