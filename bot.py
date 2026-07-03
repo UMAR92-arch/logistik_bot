@@ -37,20 +37,20 @@ logger = logging.getLogger(__name__)
 
 # ─── CONVERSATION STATES ───────────────────────────────────────────────────────
 (
-    MAIN_MENU,           # 0
-    EMPLOYER_NAME,       # 1
-    EMPLOYER_PHONE,      # 2
-    WORKER_NAME,         # 3
-    WORKER_PHONE,        # 4
-    SEARCH_CARGO,        # 5
-    AWAIT_PAYMENT,       # 6
-    AWAIT_PAYMENT_CONFIRM, # 7
-    EDIT_MENU,           # 8
-    EDIT_NAME,           # 9
-    EDIT_PHONE,          # 10
-    EMPLOYER_CARGO,      # 11
-    WORKER_CARGO,        # 12
-) = range(13)
+    MAIN_MENU,           # 1
+    EMPLOYER_NAME,       # 2
+    EMPLOYER_PHONE,      # 3
+    WORKER_NAME,         # 4
+    WORKER_PHONE,        # 5
+    SEARCH_CARGO,        # 6
+    AWAIT_PAYMENT,       # 7
+    AWAIT_PAYMENT_CONFIRM, # 8
+    EDIT_MENU,           # 9
+    EDIT_NAME,           # 10
+    EDIT_PHONE,          # 11
+    EMPLOYER_CARGO,      # 12
+    WORKER_CARGO,        # 13
+) = range(1, 14)
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
 DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:kMhzsVPUhELJnKadPEDacSVCMxcegXWz@postgres.railway.internal:5432/railway")
@@ -127,6 +127,15 @@ def init_db():
                 created_at  VARCHAR(50)
             )
         """)
+        run_query("""
+            CREATE TABLE IF NOT EXISTS wait_list (
+                id          SERIAL PRIMARY KEY,
+                user_id     BIGINT,
+                target_role VARCHAR(50),
+                cargo_type  VARCHAR(255),
+                created_at  VARCHAR(50)
+            )
+        """)
     else:
         # SQLite schema
         run_query("""
@@ -152,6 +161,15 @@ def init_db():
                 amount      INTEGER,
                 card_holder TEXT,
                 status      TEXT DEFAULT 'pending',
+                created_at  TEXT
+            )
+        """)
+        run_query("""
+            CREATE TABLE IF NOT EXISTS wait_list (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER,
+                target_role TEXT,
+                cargo_type  TEXT,
                 created_at  TEXT
             )
         """)
@@ -222,6 +240,32 @@ def update_user_field(user_id, field, value):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # field is safe because we only use it for 'full_name' or 'phone' internally
     run_query(f"UPDATE users SET {field}=?, updated_at=? WHERE user_id=?", (value, now, user_id))
+
+
+async def notify_waitlist(context: ContextTypes.DEFAULT_TYPE, new_user_role: str, cargo_type: str):
+    rows = run_query("SELECT id, user_id FROM wait_list WHERE target_role=? AND cargo_type=?", (new_user_role, cargo_type), fetchall=True)
+    if not rows:
+        return
+    
+    new_label = "📦 Buyurtma beruvchi (Shipper)" if new_user_role == "employer" else "🚚 Buyurtma oluvchi (Haydovchi)"
+    search_label = "Buyurtma oluvchini qidirish" if new_user_role == "worker" else "Buyurtma beruvchini qidirish"
+    
+    for row in rows:
+        wait_id, user_id = row
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"🔔 *Xushxabar!*\n\n"
+                    f"Siz qidirgan *{cargo_type}* yuk turi bo'yicha yangi *{new_label}* botda ro'yxatdan o'tdi!\n\n"
+                    f"Uni hoziroq topish uchun quyidagi tugmani bosing 👇\n"
+                    f"➡️ *\"🔍 {search_label}\"*"
+                ),
+                parse_mode="Markdown"
+            )
+            run_query("DELETE FROM wait_list WHERE id=?", (wait_id,))
+        except Exception as e:
+            logger.error(f"Waitlist xabarini yuborishda xatolik: {e}")
 
 
 # ─── KLAVIATURALAR ─────────────────────────────────────────────────────────────
@@ -296,7 +340,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
-    if text == "📦 Buyurtma berish":
+    if "Buyurtma berish" in text:
         await update.message.reply_text(
             "📝 *Buyurtma berish bo'limi*\n\nBir nechta savol beramiz.\n\n"
             "1️⃣ Ismingiz va familiyangizni kiriting:",
@@ -305,7 +349,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return EMPLOYER_NAME
 
-    elif text == "🚚 Buyurtma olish":
+    elif "Buyurtma olish" in text:
         await update.message.reply_text(
             "📝 *Buyurtma olish bo'limi*\n\nBir nechta savol beramiz.\n\n"
             "1️⃣ Ismingiz va familiyangizni kiriting:",
@@ -314,7 +358,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return WORKER_NAME
 
-    elif text in ("🔍 Buyurtma oluvchini qidirish", "🔍 Buyurtma beruvchini qidirish"):
+    elif "qidirish" in text:
         u = get_user(update.effective_user.id)
         if not u:
             await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz. /start bosing.")
@@ -332,7 +376,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return SEARCH_CARGO
 
-    elif text == "✏️ Ma'lumotlarni tahrirlash":
+    elif "tahrirlash" in text:
         u = get_user(update.effective_user.id)
         if not u:
             await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz.")
@@ -356,7 +400,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return EDIT_MENU
 
-    elif text == "🏠 Bosh menyu":
+    elif "Bosh menyu" in text:
         await update.message.reply_text("🏠 Bosh menyuga qaytdingiz:", reply_markup=main_menu_keyboard())
         return MAIN_MENU
 
@@ -372,15 +416,29 @@ async def search_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cargo_type = update.message.text.strip()
     u = get_user(update.effective_user.id)
     if not u:
-        await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz.")
+        await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz. /start bosing.")
         return MAIN_MENU
 
     results = search_opposite(u["role"], cargo_type)
     opposite_label = "Buyurtma oluvchi (haydovchi)" if u["role"] == "employer" else "Buyurtma beruvchi (shipper)"
+    opposite_label_short = "buyurtma oluvchi" if u["role"] == "employer" else "buyurtma beruvchi"
     
     if not results:
+        target_role = "worker" if u["role"] == "employer" else "employer"
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        existing_wait = run_query(
+            "SELECT id FROM wait_list WHERE user_id=? AND target_role=? AND cargo_type=?",
+            (u["user_id"], target_role, cargo_type), fetch=True
+        )
+        if not existing_wait:
+            run_query(
+                "INSERT INTO wait_list (user_id, target_role, cargo_type, created_at) VALUES (?,?,?,?)",
+                (u["user_id"], target_role, cargo_type, now)
+            )
         await update.message.reply_text(
-            f"😔 Hozirda *{cargo_type}* turdagi yuk bo'yicha hech qanday *{opposite_label.lower()}* topilmadi.\n\nKeyinroq qayta urinib ko'ring.",
+            f"😔 Hozirda *{cargo_type}* turdagi yuk bo'yicha hech qanday *{opposite_label}* topilmadi.\n\n"
+            f"✅ *Xavotir olmang!* Biz sizni ro'yxatga qo'shib qo'ydik.\n"
+            f"Siz qidirgandek *{opposite_label_short}* botda ro'yxatdan o'tishi bilanoq sizga darhol xabar beramiz! 🔔",
             parse_mode="Markdown",
             reply_markup=after_register_keyboard(u["role"]),
         )
@@ -429,6 +487,7 @@ async def employer_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = context.user_data.get("emp_phone", "Noma'lum")
     
     upsert_user(user.id, user.username, name, phone, "employer", cargo_type)
+    await notify_waitlist(context, "employer", cargo_type)
     await update.message.reply_text(
         "✅ *Tabriklaymiz! Muvaffaqiyatli ro'yxatdan o'tdingiz!*\n\n"
         f"👤 Ism: {name}\n"
@@ -465,6 +524,7 @@ async def worker_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = context.user_data.get("wrk_phone", "Noma'lum")
     
     upsert_user(user.id, user.username, name, phone, "worker", cargo_type)
+    await notify_waitlist(context, "worker", cargo_type)
     await update.message.reply_text(
         "✅ *Tabriklaymiz! Muvaffaqiyatli ro'yxatdan o'tdingiz!*\n\n"
         f"👤 Ism: {name}\n"
@@ -602,13 +662,13 @@ async def admin_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
 # ═══ TAHRIRLASH ════════════════════════════════════════════════════════════════
 async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    if text == "✏️ Ism/Familiya":
+    if "Ism" in text or "Familiya" in text:
         await update.message.reply_text("✏️ Yangi ism va familiyangizni kiriting:", reply_markup=ReplyKeyboardRemove())
         return EDIT_NAME
-    elif text == "📞 Telefon":
+    elif "Telefon" in text:
         await update.message.reply_text("📞 Yangi telefon raqamingizni kiriting:", reply_markup=ReplyKeyboardRemove())
         return EDIT_PHONE
-    elif text == "🔙 Orqaga":
+    elif "Orqaga" in text:
         u = get_user(update.effective_user.id)
         role = u["role"] if u else "employer"
         await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=after_register_keyboard(role))
@@ -654,10 +714,11 @@ def main():
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
+            # Yangi foydalanuvchilar uchun bosh menyu tugmalari
             MessageHandler(
-                filters.Regex("^(📦 Buyurtma berish|🚚 Buyurtma olish|🔍 Buyurtma oluvchini qidirish|🔍 Buyurtma beruvchini qidirish|✏️ Ma'lumotlarni tahrirlash|🏠 Bosh menyu)$"),
+                filters.Regex("(?i)(Buyurtma berish|Buyurtma olish)"),
                 main_menu_handler
-            )
+            ),
         ],
         per_message=False,
         states={
@@ -670,7 +731,10 @@ def main():
             WORKER_NAME:    [MessageHandler(filters.TEXT & ~filters.COMMAND, worker_name)],
             WORKER_PHONE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, worker_phone)],
             WORKER_CARGO:   [MessageHandler(filters.TEXT & ~filters.COMMAND, worker_cargo)],
-            SEARCH_CARGO:   [MessageHandler(filters.TEXT & ~filters.COMMAND, search_cargo)],
+            # SEARCH_CARGO: faqat search_cargo handleriga yo'naltiriladi
+            SEARCH_CARGO: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, search_cargo),
+            ],
             AWAIT_PAYMENT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, await_payment)],
             EDIT_MENU:      [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_menu_handler)],
             EDIT_NAME:      [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_name)],
