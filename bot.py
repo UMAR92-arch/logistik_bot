@@ -658,7 +658,29 @@ async def admin_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
                 f"Muvaffaqiyatli hamkorlik tilaymiz! 🤝"
             )
             await context.bot.send_message(chat_id=payer_id, text=msg, parse_mode="Markdown")
-            await query.edit_message_text(f"✅ To'lov #{pay_id} tasdiqlandi va foydalanuvchiga ma'lumot yuborildi.")
+            
+            # ✅ Buyurtma bajarildi — target foydalanuvchini bazadan o'chiramiz
+            run_query("DELETE FROM users WHERE user_id=?", (target_id,))
+            # Kutish ro'yxatidagi shu foydalanuvchiga tegishli yozuvlarni ham o'chiramiz
+            run_query("DELETE FROM wait_list WHERE user_id=?", (target_id,))
+            
+            # Target foydalanuvchiga xabar berish (agar iloji bo'lsa)
+            try:
+                role_label = "Buyurtma beruvchi" if target.get("role") == "employer" else "Buyurtma oluvchi"
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=(
+                        "🎉 *Tabriklaymiz!*\n\n"
+                        "Sizning buyurtmangiz muvaffaqiyatli bajarildi va kontakt ma'lumotlaringiz "
+                        "yangi hamkorga yuborildi.\n\n"
+                        "Botdan foydalanishni davom ettirish uchun /start bosing. 🚀"
+                    ),
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass  # Agar foydalanuvchi botni bloklagan bo'lsa, o'tkazib yuboramiz
+            
+            await query.edit_message_text(f"✅ To'lov #{pay_id} tasdiqlandi va foydalanuvchiga ma'lumot yuborildi.\n🗑️ Target foydalanuvchi ({target_id}) bazadan o'chirildi.")
         else:
             await context.bot.send_message(
                 chat_id=payer_id,
