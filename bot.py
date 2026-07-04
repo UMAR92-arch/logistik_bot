@@ -26,7 +26,7 @@ from telegram.ext import (
 BOT_TOKEN = "8841015797:AAGyauWuYzItmfRfy7QwUSj0PCw1WKSyVPo"
 ADMIN_ID = 8175344606  # Admin Telegram ID
 
-PAYMENT_CARD = "9860 0801 9212 8785"
+PAYMENT_CARD = "9860 1601 3067 3512"
 PAYMENT_AMOUNT = 50000
 
 logging.basicConfig(
@@ -648,6 +648,8 @@ async def admin_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
             role = payer["role"] if payer else "employer"
             opposite_label = "Buyurtma oluvchi (Haydovchi)" if role == "employer" else "Buyurtma beruvchi (Shipper)"
             uname = f"@{target['username']}" if target.get("username") else "Telegram username yo'q"
+
+            # To'lovchi (payer) ga ma'lumot yuboramiz
             msg = (
                 f"✅ *To'lovingiz tasdiqlandi!*\n\n"
                 f"🎉 *{opposite_label} ma'lumotlari:*\n\n"
@@ -658,33 +660,62 @@ async def admin_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
                 f"Muvaffaqiyatli hamkorlik tilaymiz! 🤝"
             )
             await context.bot.send_message(chat_id=payer_id, text=msg, parse_mode="Markdown")
-            
-            # ✅ Buyurtma bajarildi — target foydalanuvchini bazadan o'chiramiz
-            run_query("DELETE FROM users WHERE user_id=?", (target_id,))
-            # Kutish ro'yxatidagi shu foydalanuvchiga tegishli yozuvlarni ham o'chiramiz
-            run_query("DELETE FROM wait_list WHERE user_id=?", (target_id,))
-            
-            # Target foydalanuvchiga xabar berish (agar iloji bo'lsa)
+
+            # === IKKala foydalanuvchidan ishni tugatganini so'raymiz ===
+            # Payer ga savol
+            payer_role_label = "buyurtmachi" if role == "employer" else "buyurtma oluvchi"
+            target_role_label = "buyurtma oluvchi" if role == "employer" else "buyurtmachi"
+
+            finish_keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Ha, tugatdim", callback_data=f"finish_yes|{pay_id}|payer"),
+                    InlineKeyboardButton("❌ Yo'q, hali yo'q", callback_data=f"finish_no|{pay_id}|payer"),
+                ]
+            ])
+            await context.bot.send_message(
+                chat_id=payer_id,
+                text=(
+                    f"❓ *Savol:*\n\n"
+                    f"Siz ushbu *{target_role_label}* bilan bog'lanib, ishingizni tugatdingizmi?\n\n"
+                    f"_(Agar 'Ha' deb javob bersangiz, sizning buyurtmangiz bazadan o'chiriladi, "
+                    f"chunki siz hamkorni topib bo'ldingiz va boshqalar sizga keraksiz qo'ng'iroq qilmasligi uchun.)_"
+                ),
+                parse_mode="Markdown",
+                reply_markup=finish_keyboard,
+            )
+
+            # Target ga savol
+            finish_keyboard_target = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Ha, tugatdim", callback_data=f"finish_yes|{pay_id}|target"),
+                    InlineKeyboardButton("❌ Yo'q, hali yo'q", callback_data=f"finish_no|{pay_id}|target"),
+                ]
+            ])
             try:
-                role_label = "Buyurtma beruvchi" if target.get("role") == "employer" else "Buyurtma oluvchi"
                 await context.bot.send_message(
                     chat_id=target_id,
                     text=(
-                        "🎉 *Tabriklaymiz!*\n\n"
-                        "Sizning buyurtmangiz muvaffaqiyatli bajarildi va kontakt ma'lumotlaringiz "
-                        "yangi hamkorga yuborildi.\n\n"
-                        "Botdan foydalanishni davom ettirish uchun /start bosing. 🚀"
+                        f"🎉 *Tabriklaymiz!*\n\n"
+                        f"Sizning ma'lumotlaringiz yangi hamkorga yuborildi.\n\n"
+                        f"❓ *Savol:*\n"
+                        f"Siz ushbu *{payer_role_label}* bilan bog'lanib, ishingizni tugatdingizmi?\n\n"
+                        f"_(Agar 'Ha' deb javob bersangiz, sizning buyurtmangiz bazadan o'chiriladi, "
+                        f"chunki siz hamkorni topib bo'ldingiz va boshqalar sizga bezovta qo'ng'iroq qilmasligi uchun.)_"
                     ),
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    reply_markup=finish_keyboard_target,
                 )
-            except Exception:
-                pass  # Agar foydalanuvchi botni bloklagan bo'lsa, o'tkazib yuboramiz
-            
-            await query.edit_message_text(f"✅ To'lov #{pay_id} tasdiqlandi va foydalanuvchiga ma'lumot yuborildi.\n🗑️ Target foydalanuvchi ({target_id}) bazadan o'chirildi.")
+            except Exception as e:
+                logger.error(f"Target ga savol yuborishda xatolik: {e}")
+
+            await query.edit_message_text(
+                f"✅ To'lov #{pay_id} tasdiqlandi va ikkala foydalanuvchiga ma'lumot yuborildi.\n"
+                f"Endi ulardan ishni tugatganliklarini tasdiqlaslari so'ralmoqda."
+            )
         else:
             await context.bot.send_message(
                 chat_id=payer_id,
-                text="❌ Kechirasiz, qidirilgan foydalanuvchi topilmadi. Adminla bog'laning."
+                text="❌ Kechirasiz, qidirilgan foydalanuvchi topilmadi. Admin bilan bog'laning."
             )
             await query.edit_message_text(f"⚠️ To'lov #{pay_id} tasdiqlandi, lekin target foydalanuvchi topilmadi.")
 
@@ -699,6 +730,139 @@ async def admin_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode="Markdown",
         )
         await query.edit_message_text(f"❌ To'lov #{pay_id} rad etildi.")
+
+
+# ═══ ISHNI TUGATISH TASDIQ/RAD CALLBACK ════════════════════════════════════════
+async def finish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ikkala tomondan 'Ish tugatdingizmi?' javobini qayta ishlaydi."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|")
+    # format: finish_yes|{pay_id}|{who}  yoki  finish_no|{pay_id}|{who}
+    action = parts[0]   # finish_yes yoki finish_no
+    pay_id = int(parts[1])
+    who = parts[2]      # 'payer' yoki 'target'
+
+    payment = get_payment(pay_id)
+    if not payment:
+        await query.edit_message_text("❌ To'lov ma'lumoti topilmadi.")
+        return
+
+    payer_id = payment["payer_id"]
+    target_id = payment["target_id"]
+    caller_id = update.effective_user.id
+
+    if action == "finish_yes":
+        # Foydalanuvchi 'Ha' dedi — buyurtmasini o'chirishdan oldin yana bir bor tasdiq so'raymiz
+        payer = get_user(payer_id)
+        target = get_user(target_id)
+
+        if who == "payer":
+            user_data_row = payer
+            other_id = target_id
+        else:
+            user_data_row = target
+            other_id = payer_id
+
+        if not user_data_row:
+            await query.edit_message_text(
+                "ℹ️ Sizning buyurtmangiz allaqachon o'chirilgan yoki topilmadi."
+            )
+            return
+
+        name = user_data_row.get("full_name", "Noma'lum")
+        phone = user_data_row.get("phone", "Noma'lum")
+        cargo = user_data_row.get("cargo_type", "Kiritilmagan")
+
+        # Yakuniy tasdiqlash tugmasi
+        confirm_delete_kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Ha, o'chiring", callback_data=f"del_confirm|{pay_id}|{who}"),
+                InlineKeyboardButton("❌ Yo'q, qoldirib turing", callback_data=f"del_cancel|{pay_id}|{who}"),
+            ]
+        ])
+        await query.edit_message_text(
+            f"📋 *Tasdiqlash so'rovi:*\n\n"
+            f"Siz foydalanuvchi bilan ishingizni tugatdingiz, sizning buyurtmangiz endi botda turmasligi kerak, "
+            f"negaki siz unga xaridor yoki yo'lovchi topib bo'ldingiz. Boshqalar ham sizga qo'ng'iroq qilib "
+            f"bezovta qilmasligi uchun va tizimda xatoliklar va chalkashliklar bo'lmasligi uchun "
+            f"sizning bu eski buyurtmangizni o'chirib yuborishimiz kerak.\n\n"
+            f"🗑️ *O'chiriladigan buyurtma ma'lumotlari:*\n"
+            f"👤 Ism: {name}\n"
+            f"📞 Telefon: {phone}\n"
+            f"📦 Yuk turi: {cargo}\n\n"
+            f"*Siz bunga rozimisiz?*",
+            parse_mode="Markdown",
+            reply_markup=confirm_delete_kb,
+        )
+
+    elif action == "finish_no":
+        # Foydalanuvchi 'Yo'q' dedi — bazada qoladi, lekin to'lov qilgan odamga limit xabari
+        await query.edit_message_text(
+            "✅ Yaxshi! Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
+            "Siz keyinchalik ham xuddi shunday buyurtma berish yoki olishingiz mumkin."
+        )
+        # Agar to'lov qilgan odam (payer) 'yo'q' desa — limitini eslatamiz
+        if who == "payer":
+            try:
+                await context.bot.send_message(
+                    chat_id=payer_id,
+                    text=(
+                        "ℹ️ *Ma'lumot:*\n\n"
+                        "Siz botga to'lov qilib qo'ygansiz, shuning uchun endi sizda *1 ta limit* bor. "
+                        "Faqat bitta buyurtmachi yoki buyurtma oluvchi haqidagi ma'lumotni olishingiz mumkin. "
+                        "Agar keyinchalik yana boshqa hamkor qidirmoqchi bo'lsangiz, qayta to'lov qilishingiz kerak bo'ladi."
+                    ),
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                logger.error(f"Limit xabari yuborishda xatolik: {e}")
+
+
+# ═══ BUYURTMANI O'CHIRISH YAKUNIY TASDIQLASH ════════════════════════════════════
+async def delete_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Foydalanuvchi 'Ha, o'chiring' yoki 'Yo'q, qoldirib turing' tugmasini bosdi."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|")
+    action = parts[0]   # del_confirm yoki del_cancel
+    pay_id = int(parts[1])
+    who = parts[2]      # 'payer' yoki 'target'
+
+    payment = get_payment(pay_id)
+    if not payment:
+        await query.edit_message_text("❌ To'lov ma'lumoti topilmadi.")
+        return
+
+    payer_id = payment["payer_id"]
+    target_id = payment["target_id"]
+
+    # Kim o'z buyurtmasini o'chirmoqda
+    if who == "payer":
+        delete_user_id = payer_id
+    else:
+        delete_user_id = target_id
+
+    if action == "del_confirm":
+        # Bazadan faqat shu foydalanuvchining yozuvini o'chiramiz (odamni emas, buyurtmasini)
+        run_query("DELETE FROM users WHERE user_id=?", (delete_user_id,))
+        run_query("DELETE FROM wait_list WHERE user_id=?", (delete_user_id,))
+        await query.edit_message_text(
+            "✅ *Buyurtmangiz muvaffaqiyatli o'chirildi!*\n\n"
+            "Endi boshqalar sizga ko'rinmaydi va keraksiz qo'ng'iroqlar bo'lmaydi. "
+            "Botdan qayta foydalanish uchun /start bosing. 🚀",
+            parse_mode="Markdown",
+        )
+    elif action == "del_cancel":
+        # Foydalanuvchi 'Yo'q' dedi — hech narsa o'chirilmaydi
+        await query.edit_message_text(
+            "✅ Buyurtmangiz bazada qoldirildi.\n\n"
+            "Xuddi shunday ehtiyoj tug'ilsa, yana foydalanishingiz mumkin. "
+            "Botdan davom ettirish uchun /start bosing. 🚀",
+            parse_mode="Markdown",
+        )
 
 
 # ═══ TAHRIRLASH ════════════════════════════════════════════════════════════════
@@ -871,6 +1035,8 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(admin_payment_callback, pattern=r"^pay_(ok|no)\|\d+$"))
+    app.add_handler(CallbackQueryHandler(finish_callback, pattern=r"^finish_(yes|no)\|\d+\|(payer|target)$"))
+    app.add_handler(CallbackQueryHandler(delete_confirm_callback, pattern=r"^del_(confirm|cancel)\|\d+\|(payer|target)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
     logger.info("🚀 LogiConnect bot ishga tushdi...")
