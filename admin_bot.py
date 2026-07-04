@@ -20,7 +20,9 @@ from telegram import (
 from telegram.ext import (
     Application,
     CommandHandler,
+    MessageHandler,
     CallbackQueryHandler,
+    filters,
     ContextTypes,
 )
 
@@ -113,7 +115,7 @@ def delete_user_order(user_id):
 # ─── /START ────────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Bu bot faqat admin uchun.")
+        await update.message.reply_text("❌ Bu bot faqat admin (shoxa_0001) uchun. Siz foydalana olmaysiz.")
         return
     await update.message.reply_text(
         "👋 *Logistik Tasdiqlash Boti*\n\n"
@@ -123,6 +125,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "To'lov so'rovlari asosiy botdan avtomatik kelib turadi.",
         parse_mode="Markdown",
     )
+
+async def reject_others(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Kechirasiz, bu yopiq bot. Undan faqat tizim administratori foydalana oladi.")
 
 
 # ─── ADMIN: TO'LOV TASDIQLASH / RAD ETISH ─────────────────────────────────────
@@ -425,6 +431,9 @@ def main():
 
     # Foydalanuvchi: "Ha, o'chiring" yoki "Yo'q, qoldirib turing"
     app.add_handler(CallbackQueryHandler(delete_confirm_callback, pattern=r"^del_(confirm|cancel)\|\d+\|(payer|target)$"))
+
+    # Boshqa begona odamlar botga nimadir yozsa, rad etish
+    app.add_handler(MessageHandler(filters.ALL, reject_others))
 
     logger.info("🚀 Logistik Tasdiqlash Boti ishga tushdi...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
