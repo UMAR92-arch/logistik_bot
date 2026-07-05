@@ -250,10 +250,12 @@ async def payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Target ga savol yuborishda xatolik: {e}")
 
+        payer_name = payer['full_name'] if payer else "Noma'lum"
+        payer_phone = payer['phone'] if payer else "-"
         await query.edit_message_text(
             f"✅ *To'lov #{pay_id} tasdiqlandi!*\n\n"
-            f"👤 To'lovchi: {payer['full_name'] if payer else 'Noma\\'lum'}\n"
-            f"📞 Telefon: {payer['phone'] if payer else '-'}\n\n"
+            f"👤 To'lovchi: {payer_name}\n"
+            f"📞 Telefon: {payer_phone}\n\n"
             f"📩 Ikkala foydalanuvchiga kontakt va 'Ish tugatdingizmi?' savoli yuborildi.",
             parse_mode="Markdown",
         )
