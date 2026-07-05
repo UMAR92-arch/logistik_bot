@@ -53,8 +53,9 @@ logger = logging.getLogger(__name__)
     EMPLOYER_CARGO,        # 12
     WORKER_CARGO,          # 13
     EDIT_CARGO,            # 14  — yuk turini tahrirlash
-    ADD_ORDER_CARGO,       # 15  — qo'shimcha buyurtma qo'shish
-) = range(1, 16)
+    ADD_ORDER_CARGO,       # 15  — qo'shimcha buyurtma qo'shish (yuk turi)
+    ADD_ORDER_ROLE,        # 16  — qo'shimcha buyurtma qo'shish (rol tanlash)
+) = range(1, 17)
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
 DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:kMhzsVPUhELJnKadPEDacSVCMxcegXWz@postgres.railway.internal:5432/railway")
@@ -442,16 +443,20 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not u:
             await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz. /start bosing.")
             return MAIN_MENU
-        context.user_data["add_order_role"] = u["role"]
-        opposite_label = "buyurtma oluvchi (haydovchi)" if u["role"] == "employer" else "buyurtma beruvchi (shipper)"
         await update.message.reply_text(
-            f"➕ *Qo'shimcha buyurtma qo'shish*\n\n"
-            f"Yangi qaysi turdagi yuk bo'yicha *{opposite_label}* qidirmoqchisiz?\n"
-            "Quyidagi menyudan tanlang 👇",
+            "➕ *Qo'shimcha buyurtma qo'shish*\n\n"
+            "Siz qo'shimcha buyurtmani qaysi sifatida qo'shmoqchisiz?",
             parse_mode="Markdown",
-            reply_markup=cargo_types_keyboard(),
+            reply_markup=ReplyKeyboardMarkup(
+                [
+                    [KeyboardButton("📦 Buyurtma beruvchi sifatida")],
+                    [KeyboardButton("🚚 Buyurtma oluvchi sifatida")],
+                    [KeyboardButton("🔙 Orqaga")],
+                ],
+                resize_keyboard=True,
+            ),
         )
-        return ADD_ORDER_CARGO
+        return ADD_ORDER_ROLE
 
     elif "tahrirlash" in text:
         u = get_user(update.effective_user.id)
@@ -944,43 +949,48 @@ async def finish_no_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if payer_voted and target_voted:
         # ─── Ikkalasi ham "Yo'q" dedi ───────────────────────────────
-        # Payer ga 1 ta bepul limit beramiz
+        # Faqat PAYER ga bepul limit beramiz
         add_free_limit(payer_id)
 
-        # Payer ga xabar
-        await query.edit_message_text(
+        bonus_msg = (
             "✅ *Tushunarli!*\n\n"
             "Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
             "🎁 *Bonus:* Siz to'lov qilgan edingiz, shuning uchun sizga *1 ta bepul limit* berildi! "
             "Keyingi safar qidirib topganingizda qayta to'lov qilmasdan kontakt olishingiz mumkin.\n\n"
-            "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, biz sizni tavsiya etamiz va xabardor qilamiz. 🔔",
-            parse_mode="Markdown",
+            "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, biz sizni tavsiya etamiz va xabardor qilamiz. 🔔"
         )
-        # Target ga alohida xabar yuboramiz
-        other_id = target_id if who == "payer" else payer_id
-        try:
-            await context.bot.send_message(
-                chat_id=other_id,
-                text=(
-                    "✅ *Tushunarli!*\n\n"
-                    "Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
-                    "ℹ️ *Ma'lumot:* Siz to'lov qilmagansiz — aksincha, boshqa odam to'lov qilib sizni topgan edi. "
-                    "Shuning uchun bepul limit to'lov qilgan tomonga beriladi, sizga emas.\n\n"
-                    "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, biz sizni xabardor qilamiz. 🔔"
-                ),
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.error(f"Target ga xabar yuborishda xatolik: {e}")
+        no_bonus_msg = (
+            "✅ *Tushunarli!*\n\n"
+            "Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
+            "ℹ️ *Ma'lumot:* Siz to'lov qilmagansiz — boshqa odam to'lov qilib sizni topgan edi. "
+            "Shuning uchun bepul limit to'lov qilgan tomonga beriladi, sizga emas.\n\n"
+            "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, biz sizni xabardor qilamiz. 🔔"
+        )
+
+        # Tugmani bosgan odamga uning roliga mos xabar
+        if who == "payer":
+            await query.edit_message_text(bonus_msg, parse_mode="Markdown")
+            # Target ga "no bonus" xabari
+            try:
+                await context.bot.send_message(chat_id=target_id, text=no_bonus_msg, parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Target ga xabar yuborishda xatolik: {e}")
+        else:
+            # Target tugmani bosdi — unga "no bonus" xabari
+            await query.edit_message_text(no_bonus_msg, parse_mode="Markdown")
+            # Payer ga bonus xabari
+            try:
+                await context.bot.send_message(chat_id=payer_id, text=bonus_msg, parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Payer ga bonus xabar yuborishda xatolik: {e}")
 
     else:
         # ─── Faqat bir taraf bosdi — kutish kerak ──────────────────
-        # Bosgan odamga xabar
         partner_label = "Buyurtma beruvchi" if who == "target" else "Buyurtma oluvchi"
         await query.edit_message_text(
             f"⏳ *Ma'lumotingiz qabul qilindi.*\n\n"
             f"Lekin sizning sherigingiz (*{partner_label}*) hali «Yo'q, hali yo'q» tugmasini bosmadi.\n\n"
-            f"Ikkala tomon ham «Yo'q» deb javob berganida, sizga bepul limit haqida xabar beramiz.",
+            f"Ikkala tomon ham «Yo'q» deb javob berganida, sizga tegishli xabar yuboramiz.",
             parse_mode="Markdown",
         )
 
@@ -1123,26 +1133,83 @@ async def edit_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MAIN_MENU
 
 
+async def add_order_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if "Orqaga" in text:
+        u = get_user(update.effective_user.id)
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        return MAIN_MENU
+
+    if "Buyurtma beruvchi" in text:
+        chosen_role = "employer"
+    elif "Buyurtma oluvchi" in text:
+        chosen_role = "worker"
+    else:
+        await update.message.reply_text("❗ Iltimos, tugmalardan birini tanlang.")
+        return ADD_ORDER_ROLE
+
+    context.user_data["add_order_role"] = chosen_role
+    opposite_label = "buyurtma oluvchi (haydovchi)" if chosen_role == "employer" else "buyurtma beruvchi (shipper)"
+    await update.message.reply_text(
+        f"Yangi qaysi turdagi yuk bo'yicha *{opposite_label}* qidirmoqchisiz?\n"
+        "Quyidagi menyudan tanlang 👇",
+        parse_mode="Markdown",
+        reply_markup=cargo_types_keyboard(),
+    )
+    return ADD_ORDER_CARGO
+
+
 async def add_order_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Qo'shimcha buyurtma: faqat yuk turi so'ralib, kutish ro'yxatiga yoki qidiruvga yo'naltiriladi."""
     cargo_type = update.message.text.strip()
+    
+    if "Orqaga" in cargo_type:
+        u = get_user(update.effective_user.id)
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        return MAIN_MENU
+
     u = get_user(update.effective_user.id)
     if not u:
         await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz. /start bosing.")
         return MAIN_MENU
 
+    chosen_role = context.user_data.get("add_order_role", u["role"])
+
     # Avval bazada shu yuk turi bo'yicha mos foydalanuvchi borligini tekshiramiz
-    results = search_opposite(u["role"], cargo_type)
-    opposite_label = "Buyurtma oluvchi (haydovchi)" if u["role"] == "employer" else "Buyurtma beruvchi (shipper)"
-    opposite_label_short = "buyurtma oluvchi" if u["role"] == "employer" else "buyurtma beruvchi"
+    results = search_opposite(chosen_role, cargo_type)
+    opposite_label = "Buyurtma oluvchi (haydovchi)" if chosen_role == "employer" else "Buyurtma beruvchi (shipper)"
+    opposite_label_short = "buyurtma oluvchi" if chosen_role == "employer" else "buyurtma beruvchi"
 
     if results:
-        # Topildi — to'lov oqimiga o'tkazamiz
+        # Topildi — bepul limitni tekshiramiz
         target = results[0]
         target_id = target[0]
         context.user_data["target_id"] = target_id
         context.user_data["target_cargo"] = cargo_type
-        context.user_data["searching_as"] = u["role"]
+        context.user_data["searching_as"] = chosen_role
+
+        free = get_free_limits(u["user_id"])
+        if free > 0:
+            use_free_limit(u["user_id"])
+            target_user = get_user(target_id)
+            if target_user:
+                uname = f"@{target_user['username']}" if target_user.get("username") else "Telegram username yo'q"
+                await update.message.reply_text(
+                    f"🎁 *Sizda bepul limit bor edi — foydalandingiz!*\n\n"
+                    f"🎉 *{opposite_label} ma'lumotlari:*\n\n"
+                    f"👤 Ism: *{target_user['full_name']}*\n"
+                    f"📞 Telefon: `{target_user['phone']}`\n"
+                    f"📦 Yuk turi: {target_user.get('cargo_type', 'Kiritilmagan')}\n"
+                    f"🔗 Telegram: {uname}\n\n"
+                    f"Muvaffaqiyatli hamkorlik tilaymiz! 🤝",
+                    parse_mode="Markdown",
+                    reply_markup=after_register_keyboard(u["role"]),
+                )
+            else:
+                await update.message.reply_text("❌ Foydalanuvchi topilmadi.", reply_markup=after_register_keyboard(u["role"]))
+            return MAIN_MENU
         await update.message.reply_text(
             f"✅ *{cargo_type} bo'yicha {opposite_label} topildi!*\n\n"
             f"Uning to'liq ma'lumotlarini olish uchun botga to'lov qiling.\n\n"
@@ -1158,7 +1225,7 @@ async def add_order_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AWAIT_PAYMENT
     else:
         # Topilmadi — kutish ro'yxatiga qo'shamiz
-        target_role = "worker" if u["role"] == "employer" else "employer"
+        target_role = "worker" if chosen_role == "employer" else "employer"
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         existing_wait = run_query(
             "SELECT id FROM wait_list WHERE user_id=? AND target_role=? AND cargo_type=?",
@@ -1217,6 +1284,7 @@ def main():
             EDIT_NAME:      [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_name)],
             EDIT_PHONE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_phone)],
             EDIT_CARGO:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_cargo)],
+            ADD_ORDER_ROLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_order_role)],
             ADD_ORDER_CARGO:[MessageHandler(filters.TEXT & ~filters.COMMAND, add_order_cargo)],
         },
         fallbacks=[
