@@ -35,6 +35,7 @@ MAIN_BOT_TOKEN = os.environ.get("BOT_TOKEN", "8841015797:AAGyauWuYzItmfRfy7QwUSj
 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "8175344606"))
 PAYMENT_AMOUNT = 50_000
+WAITING_REJECT_REASON = {}
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -261,162 +262,69 @@ async def payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif action == "pay_no":
-        from telegram import Bot
-        main = Bot(token=MAIN_BOT_TOKEN)
-        try:
-            await main.send_message(
-                chat_id=payer_id,
-                text=(
-                    "❌ *To'lovingiz tasdiqlanmadi.*\n\n"
-                    "Sabab: Karta raqamida ko'rsatilgan ism-familiya yoki to'lov miqdori noto'g'ri bo'lishi mumkin.\n\n"
-                    "Iltimos, to'g'ri ma'lumotlar bilan qayta urinib ko'ring yoki admin bilan bog'laning."
-                ),
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.error(f"Payer ga rad xabar yuborishda xatolik: {e}")
-
+        WAITING_REJECT_REASON[ADMIN_ID] = {"pay_id": pay_id, "payer_id": payer_id}
+        skip_kb = InlineKeyboardMarkup([[InlineKeyboardButton("O'tkazib yuborish", callback_data=f"skip_reason|{pay_id}")]])
         await query.edit_message_text(
-            f"❌ *To'lov #{pay_id} rad etildi.*\n\n"
-            f"Foydalanuvchiga xabar yuborildi.",
-            parse_mode="Markdown",
+            f"❌ To'lov #{pay_id} ni rad etyapsiz.\n\n"
+            f"Foydalanuvchiga nima sababdan rad etilganini yozib yuboring.\n"
+            f"(Yoki sababsiz rad etish uchun 'O'tkazib yuborish' tugmasini bosing)",
+            reply_markup=skip_kb
         )
 
 
 # ─── FOYDALANUVCHI: "ISH TUGATDINGIZMI?" JAVOBLARI ───────────────────────────
-async def finish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Bu callback asosiy botdan kelgan tugmalarni ushlab oladi."""
-    # Bu handleri asosiy botda ishlaydi, admin_bot emas.
-    # Shuning uchun bu callback main bot tomonida handle qilinadi.
-    # Qarang: bot.py dagi finish_callback
-    pass
+async def send_rejection_to_user(payer_id, reason):
+    from telegram import Bot
+    main = Bot(token=MAIN_BOT_TOKEN)
+    if reason:
+        text = (
+            f"❌ *Uzur so'raymiz, admin to'lovni tasdiqlamadi!*\n\n"
+            f"❗️ *Sabab:* {reason}\n\n"
+            f"Siz aynan bizning karta raqamimizga naqd {PAYMENT_AMOUNT:,} UZS o'tkazganingizga ishonch hosil qiling.\n"
+            f"💳 Karta: `9860 1601 3067 3512`"
+        )
+    else:
+        text = (
+            f"❌ *Uzur so'raymiz, admin to'lovni tasdiqlamadi.*\n\n"
+            f"To'lov amalga oshirilmagan yoki to'lovda xatolik bor.\n"
+            f"Siz aynan bizning karta raqamimizga naqd {PAYMENT_AMOUNT:,} UZS o'tkazganingizga ishonch hosil qiling.\n"
+            f"💳 Karta: `9860 1601 3067 3512`"
+        )
+    try:
+        await main.send_message(chat_id=payer_id, text=text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Xatolik: {e}")
 
+async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = update.effective_user.id
+    if admin_id != ADMIN_ID:
+        await update.message.reply_text("❌ Kechirasiz, bu yopiq bot. Undan faqat tizim administratori foydalana oladi.")
+        return
 
-# ─── ISH TUGATISH: HA dedi → tasdiqlash so'rovi ──────────────────────────────
-async def finish_yes_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if admin_id in WAITING_REJECT_REASON:
+        state = WAITING_REJECT_REASON.pop(admin_id)
+        reason = update.message.text
+        payer_id = state["payer_id"]
+        pay_id = state["pay_id"]
+        await send_rejection_to_user(payer_id, reason)
+        await update.message.reply_text(f"✅ To'lov #{pay_id} rad etildi va foydalanuvchiga xabar yuborildi.")
+        return
+
+    await update.message.reply_text("👋 Xabar qabul qilindi. Tasdiqlash uchun to'lovlarni kuting.")
+
+async def skip_reason_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
+    
     parts = query.data.split("|")
     pay_id = int(parts[1])
-    who = parts[2]  # payer yoki target
-
-    payment = get_payment(pay_id)
-    if not payment:
-        await query.edit_message_text("❌ To'lov ma'lumoti topilmadi.")
-        return
-
-    payer_id = payment["payer_id"]
-    target_id = payment["target_id"]
-
-    delete_uid = payer_id if who == "payer" else target_id
-    user_data_row = get_user(delete_uid)
-
-    if not user_data_row:
-        await query.edit_message_text("ℹ️ Sizning buyurtmangiz allaqachon o'chirilgan yoki topilmadi.")
-        return
-
-    name  = user_data_row.get("full_name", "Noma'lum")
-    phone = user_data_row.get("phone", "Noma'lum")
-    cargo = user_data_row.get("cargo_type", "Kiritilmagan")
-
-    confirm_kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Ha, o'chiring", callback_data=f"del_confirm|{pay_id}|{who}"),
-        InlineKeyboardButton("❌ Yo'q, qoldirib turing", callback_data=f"del_cancel|{pay_id}|{who}"),
-    ]])
-
-    await query.edit_message_text(
-        f"📋 *Tasdiqlash so'rovi:*\n\n"
-        f"Siz foydalanuvchi bilan ishingizni tugatdingiz — bu juda yaxshi! 🎉\n\n"
-        f"Endi sizning buyurtmangiz botda turmasligi kerak, negaki:\n"
-        f"• Siz xaridor/yo'lovchi topib bo'ldingiz\n"
-        f"• Boshqalar sizga keraksiz qo'ng'iroq qilmasligi uchun\n"
-        f"• Tizimda xatoliklar va chalkashliklar bo'lmasligi uchun\n\n"
-        f"🗑️ *O'chiriladigan buyurtma:*\n"
-        f"👤 Ism: {name}\n"
-        f"📞 Telefon: {phone}\n"
-        f"📦 Yuk turi: {cargo}\n\n"
-        f"*Siz bunga rozimisiz?*",
-        parse_mode="Markdown",
-        reply_markup=confirm_kb,
-    )
-
-
-# ─── ISH TUGATISH: YO'Q dedi ─────────────────────────────────────────────────
-async def finish_no_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    parts = query.data.split("|")
-    pay_id = int(parts[1])
-    who = parts[2]
-
-    payment = get_payment(pay_id)
-    payer_id = payment["payer_id"] if payment else None
-
-    await query.edit_message_text(
-        "✅ *Tushunarli!*\n\n"
-        "Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
-        "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, "
-        "biz sizni tavsiya etamiz va yana xabardor qilamiz. 🔔\n\n"
-        "Botdan davom etish uchun /start bosing.",
-        parse_mode="Markdown",
-    )
-
-    # Agar to'lov qilgan odam (payer) "Yo'q" desa — limit haqida eslatamiz
-    if who == "payer" and payer_id:
-        try:
-            from telegram import Bot
-            main = Bot(token=MAIN_BOT_TOKEN)
-            await main.send_message(
-                chat_id=payer_id,
-                text=(
-                    "ℹ️ *Ma'lumot:*\n\n"
-                    "Siz botga to'lov qilib qo'ygansiz, shuning uchun endi sizda *1 ta limit* bor. "
-                    "Faqat bitta buyurtmachi yoki buyurtma oluvchi haqidagi ma'lumotni olishingiz mumkin. "
-                    "Agar keyinchalik yana boshqa hamkor qidirmoqchi bo'lsangiz, qayta to'lov qilishingiz kerak bo'ladi."
-                ),
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.error(f"Limit xabari yuborishda xatolik: {e}")
-
-
-# ─── BUYURTMANI O'CHIRISH: YAKUNIY TASDIQLASH ────────────────────────────────
-async def delete_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    parts = query.data.split("|")
-    action  = parts[0]   # del_confirm yoki del_cancel
-    pay_id  = int(parts[1])
-    who     = parts[2]   # payer yoki target
-
-    payment = get_payment(pay_id)
-    if not payment:
-        await query.edit_message_text("❌ To'lov ma'lumoti topilmadi.")
-        return
-
-    delete_uid = payment["payer_id"] if who == "payer" else payment["target_id"]
-
-    if action == "del_confirm":
-        delete_user_order(delete_uid)
-        await query.edit_message_text(
-            "✅ *Buyurtmangiz muvaffaqiyatli o'chirildi!*\n\n"
-            "Endi boshqalar sizga ko'rinmaydi va keraksiz qo'ng'iroqlar bo'lmaydi.\n\n"
-            "Agar keyinchalik yana foydalanmoqchi bo'lsangiz, /start bosing va qaytadan "
-            "ro'yxatdan o'tishingiz mumkin. 🚀",
-            parse_mode="Markdown",
-        )
-    elif action == "del_cancel":
-        await query.edit_message_text(
-            "✅ *Yaxshi, buyurtmangiz bazada qoldirildi.*\n\n"
-            "Xuddi shunga o'xshash ehtiyoj bo'lsa, yana foydalanishingiz mumkin.\n"
-            "Biz sizning buyurtmangizni boshqa moslar uchun tavsiya etib boramiz. 🔔\n\n"
-            "Botdan davom etish uchun /start bosing.",
-            parse_mode="Markdown",
-        )
-
+    
+    if ADMIN_ID in WAITING_REJECT_REASON:
+        state = WAITING_REJECT_REASON.pop(ADMIN_ID)
+        payer_id = state["payer_id"]
+        
+        await send_rejection_to_user(payer_id, None)
+        await query.edit_message_text(f"✅ To'lov #{pay_id} sababsiz rad etildi va foydalanuvchiga xabar yuborildi.")
 
 # ─── ASOSIY ──────────────────────────────────────────────────────────────────
 def main():
@@ -427,14 +335,12 @@ def main():
     # Admin: to'lovni tasdiqlash/rad etish
     app.add_handler(CallbackQueryHandler(payment_callback,       pattern=r"^pay_(ok|no)\|\d+$"))
 
-    # Foydalanuvchi: "Ha, tugatdim" yoki "Yo'q, hali yo'q"
-    app.add_handler(CallbackQueryHandler(finish_yes_callback,    pattern=r"^finish_yes\|\d+\|(payer|target)$"))
-    app.add_handler(CallbackQueryHandler(finish_no_callback,     pattern=r"^finish_no\|\d+\|(payer|target)$"))
+    app.add_handler(CallbackQueryHandler(skip_reason_callback,   pattern=r"^skip_reason\|\d+$"))
 
-    # Foydalanuvchi: "Ha, o'chiring" yoki "Yo'q, qoldirib turing"
-    app.add_handler(CallbackQueryHandler(delete_confirm_callback, pattern=r"^del_(confirm|cancel)\|\d+\|(payer|target)$"))
+    # Matnli xabarlar uchun (rad etish sababini yozish)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_message))
 
-    # Boshqa begona odamlar botga nimadir yozsa, rad etish
+    # Boshqa begona odamlarni rad etish
     app.add_handler(MessageHandler(filters.ALL, reject_others))
 
     logger.info("🚀 Logistik Tasdiqlash Boti ishga tushdi...")

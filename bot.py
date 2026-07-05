@@ -246,6 +246,12 @@ def update_user_field(user_id, field, value):
     run_query(f"UPDATE users SET {field}=?, updated_at=? WHERE user_id=?", (value, now, user_id))
 
 
+def delete_user_order(user_id):
+    """Foydalanuvchi buyurtmasini (users va wait_list) o'chiradi."""
+    run_query("DELETE FROM users WHERE user_id=?", (user_id,))
+    run_query("DELETE FROM wait_list WHERE user_id=?", (user_id,))
+
+
 async def notify_waitlist(context: ContextTypes.DEFAULT_TYPE, new_user_role: str, cargo_type: str):
     rows = run_query("SELECT id, user_id FROM wait_list WHERE target_role=? AND cargo_type=?", (new_user_role, cargo_type), fetchall=True)
     if not rows:
@@ -750,9 +756,126 @@ async def admin_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(f"❌ To'lov #{pay_id} rad etildi.")
 
 
-# ═══ ESLATMA ════════════════════════════════════════════════════════════════════
-# finish_yes / finish_no / del_confirm / del_cancel callbacklari admin_bot.py da
-# (Logistik_tasdiqlash_bot) ishlaydi. Bu faylda ular yo'q.
+# ═══ ISH TUGATISH: HA / YO'Q ═════════════════════════════════════════════════════
+async def finish_yes_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|")
+    pay_id = int(parts[1])
+    who = parts[2]  # payer yoki target
+
+    payment = get_payment(pay_id)
+    if not payment:
+        await query.edit_message_text("❌ To'lov ma'lumoti topilmadi.")
+        return
+
+    payer_id = payment["payer_id"]
+    target_id = payment["target_id"]
+
+    delete_uid = payer_id if who == "payer" else target_id
+    user_data_row = get_user(delete_uid)
+
+    if not user_data_row:
+        await query.edit_message_text("ℹ️ Sizning buyurtmangiz allaqachon o'chirilgan yoki topilmadi.")
+        return
+
+    name  = user_data_row.get("full_name", "Noma'lum")
+    phone = user_data_row.get("phone", "Noma'lum")
+    cargo = user_data_row.get("cargo_type", "Kiritilmagan")
+
+    confirm_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Ha, o'chiring", callback_data=f"del_confirm|{pay_id}|{who}"),
+        InlineKeyboardButton("❌ Yo'q, qoldirib turing", callback_data=f"del_cancel|{pay_id}|{who}"),
+    ]])
+
+    await query.edit_message_text(
+        f"📋 *Tasdiqlash so'rovi:*\n\n"
+        f"Siz foydalanuvchi bilan ishingizni tugatdingiz — bu juda yaxshi! 🎉\n\n"
+        f"Endi sizning buyurtmangiz botda turmasligi kerak, negaki:\n"
+        f"• Siz xaridor/yo'lovchi topib bo'ldingiz\n"
+        f"• Boshqalar sizga keraksiz qo'ng'iroq qilmasligi uchun\n"
+        f"• Tizimda xatoliklar va chalkashliklar bo'lmasligi uchun\n\n"
+        f"🗑️ *O'chiriladigan buyurtma:*\n"
+        f"👤 Ism: {name}\n"
+        f"📞 Telefon: {phone}\n"
+        f"📦 Yuk turi: {cargo}\n\n"
+        f"*Siz bunga rozimisiz?*",
+        parse_mode="Markdown",
+        reply_markup=confirm_kb,
+    )
+
+
+async def finish_no_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|")
+    pay_id = int(parts[1])
+    who = parts[2]
+
+    payment = get_payment(pay_id)
+    payer_id = payment["payer_id"] if payment else None
+
+    await query.edit_message_text(
+        "✅ *Tushunarli!*\n\n"
+        "Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
+        "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, "
+        "biz sizni tavsiya etamiz va yana xabardor qilamiz. 🔔\n\n"
+        "Botdan davom etish uchun /start bosing.",
+        parse_mode="Markdown",
+    )
+
+    if who == "payer" and payer_id:
+        try:
+            await context.bot.send_message(
+                chat_id=payer_id,
+                text=(
+                    "ℹ️ *Ma'lumot:*\n\n"
+                    "Siz botga to'lov qilib qo'ygansiz, shuning uchun endi sizda *1 ta limit* bor. "
+                    "Faqat bitta buyurtmachi yoki buyurtma oluvchi haqidagi ma'lumotni olishingiz mumkin. "
+                    "Agar keyinchalik yana boshqa hamkor qidirmoqchi bo'lsangiz, qayta to'lov qilishingiz kerak bo'ladi."
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.error(f"Limit xabari yuborishda xatolik: {e}")
+
+
+async def delete_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|")
+    action  = parts[0]   # del_confirm yoki del_cancel
+    pay_id  = int(parts[1])
+    who     = parts[2]   # payer yoki target
+
+    payment = get_payment(pay_id)
+    if not payment:
+        await query.edit_message_text("❌ To'lov ma'lumoti topilmadi.")
+        return
+
+    delete_uid = payment["payer_id"] if who == "payer" else payment["target_id"]
+
+    if action == "del_confirm":
+        delete_user_order(delete_uid)
+        await query.edit_message_text(
+            "✅ *Buyurtmangiz muvaffaqiyatli o'chirildi!*\n\n"
+            "Endi boshqalar sizga ko'rinmaydi va keraksiz qo'ng'iroqlar bo'lmaydi.\n\n"
+            "Agar keyinchalik yana foydalanmoqchi bo'lsangiz, /start bosing va qaytadan "
+            "ro'yxatdan o'tishingiz mumkin. 🚀",
+            parse_mode="Markdown",
+        )
+    elif action == "del_cancel":
+        await query.edit_message_text(
+            "✅ *Yaxshi, buyurtmangiz bazada qoldirildi.*\n\n"
+            "Xuddi shunga o'xshash ehtiyoj bo'lsa, yana foydalanishingiz mumkin.\n"
+            "Biz sizning buyurtmangizni boshqa moslar uchun tavsiya etib boramiz. 🔔\n\n"
+            "Botdan davom etish uchun /start bosing.",
+            parse_mode="Markdown",
+        )
+
 
 
 # ═══ TAHRIRLASH ════════════════════════════════════════════════════════════════
@@ -928,6 +1051,11 @@ def main():
     # (ADMIN_BOT_TOKEN bo'lsa, bu handler kerak emas — admin_bot.py boshqaradi)
     if not ADMIN_BOT_TOKEN:
         app.add_handler(CallbackQueryHandler(admin_payment_callback, pattern=r"^pay_(ok|no)\|\d+$"))
+
+    app.add_handler(CallbackQueryHandler(finish_yes_callback,    pattern=r"^finish_yes\|\d+\|(payer|target)$"))
+    app.add_handler(CallbackQueryHandler(finish_no_callback,     pattern=r"^finish_no\|\d+\|(payer|target)$"))
+    app.add_handler(CallbackQueryHandler(delete_confirm_callback, pattern=r"^del_(confirm|cancel)\|\d+\|(payer|target)$"))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
     logger.info("🚀 LogiConnect bot ishga tushdi...")
