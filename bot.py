@@ -126,15 +126,25 @@ def init_db():
             pass
         run_query("""
             CREATE TABLE IF NOT EXISTS payments (
-                id          SERIAL PRIMARY KEY,
-                payer_id    BIGINT,
-                target_id   BIGINT,
-                amount      INTEGER,
-                card_holder VARCHAR(255),
-                status      VARCHAR(50) DEFAULT 'pending',
-                created_at  VARCHAR(50)
+                id              SERIAL PRIMARY KEY,
+                payer_id        BIGINT,
+                target_id       BIGINT,
+                amount          INTEGER,
+                card_holder     VARCHAR(255),
+                status          VARCHAR(50) DEFAULT 'pending',
+                created_at      VARCHAR(50),
+                payer_no_vote   INTEGER DEFAULT 0,
+                target_no_vote  INTEGER DEFAULT 0
             )
         """)
+        try:
+            run_query("ALTER TABLE payments ADD COLUMN payer_no_vote INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            run_query("ALTER TABLE payments ADD COLUMN target_no_vote INTEGER DEFAULT 0")
+        except Exception:
+            pass
         run_query("""
             CREATE TABLE IF NOT EXISTS wait_list (
                 id          SERIAL PRIMARY KEY,
@@ -167,15 +177,25 @@ def init_db():
             pass
         run_query("""
             CREATE TABLE IF NOT EXISTS payments (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                payer_id    INTEGER,
-                target_id   INTEGER,
-                amount      INTEGER,
-                card_holder TEXT,
-                status      TEXT DEFAULT 'pending',
-                created_at  TEXT
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                payer_id        INTEGER,
+                target_id       INTEGER,
+                amount          INTEGER,
+                card_holder     TEXT,
+                status          TEXT DEFAULT 'pending',
+                created_at      TEXT,
+                payer_no_vote   INTEGER DEFAULT 0,
+                target_no_vote  INTEGER DEFAULT 0
             )
         """)
+        try:
+            run_query("ALTER TABLE payments ADD COLUMN payer_no_vote INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            run_query("ALTER TABLE payments ADD COLUMN target_no_vote INTEGER DEFAULT 0")
+        except Exception:
+            pass
         run_query("""
             CREATE TABLE IF NOT EXISTS wait_list (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,9 +263,17 @@ def confirm_payment(pay_id):
 def get_payment(pay_id):
     row = run_query("SELECT * FROM payments WHERE id=?", (pay_id,), fetch=True)
     if row:
-        cols = ["id", "payer_id", "target_id", "amount", "card_holder", "status", "created_at"]
+        cols = ["id", "payer_id", "target_id", "amount", "card_holder", "status", "created_at", "payer_no_vote", "target_no_vote"]
         return dict(zip(cols, row))
     return None
+
+
+def set_no_vote(pay_id, who):
+    """who: 'payer' yoki 'target'"""
+    if who == "payer":
+        run_query("UPDATE payments SET payer_no_vote=1 WHERE id=?", (pay_id,))
+    else:
+        run_query("UPDATE payments SET target_no_vote=1 WHERE id=?", (pay_id,))
 
 
 def update_user_field(user_id, field, value):
@@ -896,24 +924,65 @@ async def finish_no_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     parts = query.data.split("|")
     pay_id = int(parts[1])
-    who = parts[2]
+    who = parts[2]  # "payer" yoki "target"
 
     payment = get_payment(pay_id)
-    payer_id = payment["payer_id"] if payment else None
+    if not payment:
+        await query.edit_message_text("❌ To'lov ma'lumoti topilmadi.")
+        return
 
-    # "Yo'q" deb bosgan payer ga bepul limit beramiz
-    if who == "payer" and payer_id:
+    payer_id  = payment["payer_id"]
+    target_id = payment["target_id"]
+
+    # Bu odamning ovozini saqlаymiz
+    set_no_vote(pay_id, who)
+    # Yangilangan holat
+    payment = get_payment(pay_id)
+
+    payer_voted  = payment.get("payer_no_vote", 0)
+    target_voted = payment.get("target_no_vote", 0)
+
+    if payer_voted and target_voted:
+        # ─── Ikkalasi ham "Yo'q" dedi ───────────────────────────────
+        # Payer ga 1 ta bepul limit beramiz
         add_free_limit(payer_id)
 
-    await query.edit_message_text(
-        "✅ *Tushunarli!*\n\n"
-        "Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
-        "🎁 *Bonus:* Keyingi safar qidirib topganingizda *1 ta bepul limit* berildi! "
-        "Ya'ni qayta to'lov qilmasdan bir marta kontakt olishingiz mumkin.\n\n"
-        "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, "
-        "biz sizni tavsiya etamiz va yana xabardor qilamiz. 🔔",
-        parse_mode="Markdown",
-    )
+        # Payer ga xabar
+        await query.edit_message_text(
+            "✅ *Tushunarli!*\n\n"
+            "Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
+            "🎁 *Bonus:* Siz to'lov qilgan edingiz, shuning uchun sizga *1 ta bepul limit* berildi! "
+            "Keyingi safar qidirib topganingizda qayta to'lov qilmasdan kontakt olishingiz mumkin.\n\n"
+            "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, biz sizni tavsiya etamiz va xabardor qilamiz. 🔔",
+            parse_mode="Markdown",
+        )
+        # Target ga alohida xabar yuboramiz
+        other_id = target_id if who == "payer" else payer_id
+        try:
+            await context.bot.send_message(
+                chat_id=other_id,
+                text=(
+                    "✅ *Tushunarli!*\n\n"
+                    "Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
+                    "ℹ️ *Ma'lumot:* Siz to'lov qilmagansiz — aksincha, boshqa odam to'lov qilib sizni topgan edi. "
+                    "Shuning uchun bepul limit to'lov qilgan tomonga beriladi, sizga emas.\n\n"
+                    "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, biz sizni xabardor qilamiz. 🔔"
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.error(f"Target ga xabar yuborishda xatolik: {e}")
+
+    else:
+        # ─── Faqat bir taraf bosdi — kutish kerak ──────────────────
+        # Bosgan odamga xabar
+        partner_label = "Buyurtma beruvchi" if who == "target" else "Buyurtma oluvchi"
+        await query.edit_message_text(
+            f"⏳ *Ma'lumotingiz qabul qilindi.*\n\n"
+            f"Lekin sizning sherigingiz (*{partner_label}*) hali «Yo'q, hali yo'q» tugmasini bosmadi.\n\n"
+            f"Ikkala tomon ham «Yo'q» deb javob berganida, sizga bepul limit haqida xabar beramiz.",
+            parse_mode="Markdown",
+        )
 
 
 async def delete_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
