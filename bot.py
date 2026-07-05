@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
     WORKER_CARGO,          # 13
     EDIT_CARGO,            # 14  — yuk turini tahrirlash
     ADD_ORDER_CARGO,       # 15  — qo'shimcha buyurtma qo'shish (yuk turi)
-    ADD_ORDER_ROLE,        # 16  — qo'shimcha buyurtma qo'shish (rol tanlash)
+    EDIT_ROLE,             # 16  — rolni tahrirlash
 ) = range(1, 17)
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
@@ -443,20 +443,15 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not u:
             await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz. /start bosing.")
             return MAIN_MENU
+        opposite_label = "buyurtma oluvchi (haydovchi)" if u["role"] == "employer" else "buyurtma beruvchi (shipper)"
         await update.message.reply_text(
-            "➕ *Qo'shimcha buyurtma qo'shish*\n\n"
-            "Siz qo'shimcha buyurtmani qaysi sifatida qo'shmoqchisiz?",
+            f"➕ *Qo'shimcha buyurtma qo'shish*\n\n"
+            f"Yangi qaysi turdagi yuk bo'yicha *{opposite_label}* qidirmoqchisiz?\n"
+            "Quyidagi menyudan tanlang 👇",
             parse_mode="Markdown",
-            reply_markup=ReplyKeyboardMarkup(
-                [
-                    [KeyboardButton("📦 Buyurtma beruvchi sifatida")],
-                    [KeyboardButton("🚚 Buyurtma oluvchi sifatida")],
-                    [KeyboardButton("🔙 Orqaga")],
-                ],
-                resize_keyboard=True,
-            ),
+            reply_markup=cargo_types_keyboard(),
         )
-        return ADD_ORDER_ROLE
+        return ADD_ORDER_CARGO
 
     elif "tahrirlash" in text:
         u = get_user(update.effective_user.id)
@@ -474,7 +469,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardMarkup(
                 [
                     [KeyboardButton("✏️ Ism/Familiya"), KeyboardButton("📞 Telefon")],
-                    [KeyboardButton("📦 Yuk turi")],
+                    [KeyboardButton("🏷️ Rolni o'zgartirish"), KeyboardButton("📦 Yuk turi")],
                     [KeyboardButton("🔙 Orqaga")],
                 ],
                 resize_keyboard=True,
@@ -1077,6 +1072,20 @@ async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "Telefon" in text:
         await update.message.reply_text("📞 Yangi telefon raqamingizni kiriting:", reply_markup=ReplyKeyboardRemove())
         return EDIT_PHONE
+    elif "Rol" in text:
+        await update.message.reply_text(
+            "🏷️ *Rolni o'zgartirish*\n\nSiz qaysi sifatida davom etmoqchisiz?",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup(
+                [
+                    [KeyboardButton("📦 Buyurtma beruvchi sifatida")],
+                    [KeyboardButton("🚚 Buyurtma oluvchi sifatida")],
+                    [KeyboardButton("🔙 Orqaga")],
+                ],
+                resize_keyboard=True,
+            ),
+        )
+        return EDIT_ROLE
     elif "Yuk turi" in text:
         await update.message.reply_text(
             "📦 Yangi yuk turini quyidagi menyudan tanlang:",
@@ -1133,12 +1142,14 @@ async def edit_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MAIN_MENU
 
 
-async def add_order_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def edit_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    u = get_user(update.effective_user.id)
+    if not u:
+        return MAIN_MENU
+
     if "Orqaga" in text:
-        u = get_user(update.effective_user.id)
-        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
-        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=after_register_keyboard(u["role"]))
         return MAIN_MENU
 
     if "Buyurtma beruvchi" in text:
@@ -1147,17 +1158,18 @@ async def add_order_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chosen_role = "worker"
     else:
         await update.message.reply_text("❗ Iltimos, tugmalardan birini tanlang.")
-        return ADD_ORDER_ROLE
+        return EDIT_ROLE
 
-    context.user_data["add_order_role"] = chosen_role
-    opposite_label = "buyurtma oluvchi (haydovchi)" if chosen_role == "employer" else "buyurtma beruvchi (shipper)"
+    # Rolni o'zgartiramiz
+    update_user_field(update.effective_user.id, "role", chosen_role)
+    role_label = "📦 Buyurtma beruvchi" if chosen_role == "employer" else "🚚 Buyurtma oluvchi"
     await update.message.reply_text(
-        f"Yangi qaysi turdagi yuk bo'yicha *{opposite_label}* qidirmoqchisiz?\n"
-        "Quyidagi menyudan tanlang 👇",
+        f"✅ Rolingiz *{role_label}* qilib o'zgartirildi!\n\n"
+        f"Agar yuk turingiz ham o'zgargan bo'lsa, uni ham *Tahrirlash* bo'limidan o'zgartirishingiz mumkin.",
+        reply_markup=after_register_keyboard(chosen_role),
         parse_mode="Markdown",
-        reply_markup=cargo_types_keyboard(),
     )
-    return ADD_ORDER_CARGO
+    return MAIN_MENU
 
 
 async def add_order_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1175,7 +1187,7 @@ async def add_order_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz. /start bosing.")
         return MAIN_MENU
 
-    chosen_role = context.user_data.get("add_order_role", u["role"])
+    chosen_role = u["role"]
 
     # Avval bazada shu yuk turi bo'yicha mos foydalanuvchi borligini tekshiramiz
     results = search_opposite(chosen_role, cargo_type)
@@ -1284,7 +1296,7 @@ def main():
             EDIT_NAME:      [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_name)],
             EDIT_PHONE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_phone)],
             EDIT_CARGO:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_cargo)],
-            ADD_ORDER_ROLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_order_role)],
+            EDIT_ROLE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_role)],
             ADD_ORDER_CARGO:[MessageHandler(filters.TEXT & ~filters.COMMAND, add_order_cargo)],
         },
         fallbacks=[
