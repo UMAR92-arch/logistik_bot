@@ -465,6 +465,10 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ADD_ORDER_CARGO
 
     elif "Bot xatoliklari" in text:
+        u = get_user(update.effective_user.id)
+        if not u:
+            await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz. Avval ro'yxatdan o'tish uchun /start buyrug'ini bosing.")
+            return MAIN_MENU
         await update.message.reply_text(
             "🐛 *Bot xatoliklari bo'limi*\n\n"
             "Botdan foydalanishda qanday muammo, bag yoki xatoliklarga duch keldingiz? "
