@@ -187,45 +187,38 @@ async def payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_role_label = "buyurtma oluvchi" if role == "employer" else "buyurtmachi"
         uname = f"@{target['username']}" if target.get("username") else "Telegram username yo'q"
 
-        # ── Asosiy bot orqali payer ga ma'lumot va savol yuboramiz ──
+        # ── Asosiy bot orqali payer ga kontakt + savol BITTA xabarda ──
         from telegram import Bot
         main = Bot(token=MAIN_BOT_TOKEN)
 
-        contact_msg = (
+        finish_kb_payer = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Ha, tugatdim",  callback_data=f"finish_yes|{pay_id}|payer"),
+            InlineKeyboardButton("❌ Yo'q, hali yo'q", callback_data=f"finish_no|{pay_id}|payer"),
+        ]])
+
+        combined_payer_msg = (
             f"✅ *To'lovingiz tasdiqlandi!*\n\n"
             f"🎉 *{opposite_label} ma'lumotlari:*\n\n"
             f"👤 Ism: *{target['full_name']}*\n"
             f"📞 Telefon: `{target['phone']}`\n"
             f"📦 Yuk turi: {target.get('cargo_type', 'Kiritilmagan')}\n"
             f"🔗 Telegram: {uname}\n\n"
-            f"Muvaffaqiyatli hamkorlik tilaymiz! 🤝"
+            f"Muvaffaqiyatli hamkorlik tilaymiz! 🤝\n\n"
+            f"─────────────────────\n"
+            f"❓ *Savol:*\n\n"
+            f"Siz ushbu *{target_role_label}* bilan bog'landingizmi?\n"
+            f"Kelishib oldingizmi? Ish hal bo'ldimi?\n\n"
+            f"_(Agar 'Ha' deb javob bersangiz, sizning buyurtmangiz bazadan o'chiriladi.)_"
         )
-        try:
-            await main.send_message(chat_id=payer_id, text=contact_msg, parse_mode="Markdown")
-        except Exception as e:
-            logger.error(f"Payer ga kontakt yuborishda xatolik: {e}")
-
-        # ── Payer ga "Ish tugatdingizmi?" savoli ──
-        finish_kb_payer = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Ha, tugatdim", callback_data=f"finish_yes|{pay_id}|payer"),
-            InlineKeyboardButton("❌ Yo'q, hali yo'q", callback_data=f"finish_no|{pay_id}|payer"),
-        ]])
         try:
             await main.send_message(
                 chat_id=payer_id,
-                text=(
-                    f"❓ *Savol:*\n\n"
-                    f"Siz ushbu *{target_role_label}* bilan bog'landingizmi?\n"
-                    f"Kelishib oldingizmi? Ish hal bo'ldimi?\n\n"
-                    f"_(Agar 'Ha' deb javob bersangiz, sizning buyurtmangiz bazadan o'chiriladi "
-                    f"— chunki siz hamkorni topib bo'ldingiz va keyingi safar boshqa odamlar "
-                    f"sizni telefon qilib bezovta qilmasligi uchun.)_"
-                ),
+                text=combined_payer_msg,
                 parse_mode="Markdown",
                 reply_markup=finish_kb_payer,
             )
         except Exception as e:
-            logger.error(f"Payer ga savol yuborishda xatolik: {e}")
+            logger.error(f"Payer ga birlashtirilgan xabar yuborishda xatolik: {e}")
 
         # ── Target ga "Ish tugatdingizmi?" savoli ──
         finish_kb_target = InlineKeyboardMarkup([[
