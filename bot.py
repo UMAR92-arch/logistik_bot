@@ -23,10 +23,10 @@ from telegram.ext import (
 )
 
 # ─── SOZLAMALAR ────────────────────────────────────────────────────────────────
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8841015797:AAGyauWuYzItmfRfy7QwUSj0PCw1WKSyVPo")
+BOT_TOKEN = "8841015797:AAGyauWuYzItmfRfy7QwUSj0PCw1WKSyVPo"
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "8175344606"))  # Admin Telegram ID
 # Alohida tasdiqlash boti tokeni (Logistik_tasdiqlash_bot)
-ADMIN_BOT_TOKEN = os.environ.get("ADMIN_BOT_TOKEN", "8939855367:AAEWex_skRAjKhHQbD95R3E6COp6Q6AQkLQ")
+ADMIN_BOT_TOKEN = "8939855367:AAEWex_skRAjKhHQbD95R3E6COp6Q6AQkLQ"
 
 PAYMENT_CARD = "9860 1601 3067 3512"
 PAYMENT_AMOUNT = 50_000
@@ -293,7 +293,6 @@ def after_register_keyboard(role):
             [KeyboardButton(search_btn)],
             [KeyboardButton("➕ Buyurtma qo'shish")],
             [KeyboardButton("✏️ Ma'lumotlarni tahrirlash")],
-            [KeyboardButton("🏠 Bosh menyu")],
         ],
         resize_keyboard=True,
     )
