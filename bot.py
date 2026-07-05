@@ -24,11 +24,11 @@ from telegram.ext import (
 
 # ─── SOZLAMALAR ────────────────────────────────────────────────────────────────
 BOT_TOKEN = "8841015797:AAGyauWuYzItmfRfy7QwUSj0PCw1WKSyVPo"
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "8175344606"))  # Admin Telegram ID
+ADMIN_IDS = [8175344606, 5611922080, 1277637813]
 # Alohida tasdiqlash boti tokeni (Logistik_tasdiqlash_bot)
 ADMIN_BOT_TOKEN = "8939855367:AAEWex_skRAjKhHQbD95R3E6COp6Q6AQkLQ"
 
-PAYMENT_CARD = "9860 1601 3067 3512"
+PAYMENT_CARD = "9860 0801 9212 8785"
 PAYMENT_AMOUNT = 50_000
 
 logging.basicConfig(
@@ -55,7 +55,8 @@ logger = logging.getLogger(__name__)
     EDIT_CARGO,            # 14  — yuk turini tahrirlash
     ADD_ORDER_CARGO,       # 15  — qo'shimcha buyurtma qo'shish (yuk turi)
     EDIT_ROLE,             # 16  — rolni tahrirlash
-) = range(1, 17)
+    BUG_REPORT,            # 17  — bot xatoliklarini yozish
+) = range(1, 18)
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
 DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:kMhzsVPUhELJnKadPEDacSVCMxcegXWz@postgres.railway.internal:5432/railway")
@@ -343,8 +344,8 @@ def after_register_keyboard(role):
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton(search_btn)],
-            [KeyboardButton("➕ Buyurtma qo'shish")],
-            [KeyboardButton("✏️ Ma'lumotlarni tahrirlash")],
+            [KeyboardButton("➕ Buyurtma qo'shish"), KeyboardButton("✏️ Ma'lumotlarni tahrirlash")],
+            [KeyboardButton("🐛 Bot xatoliklari")],
         ],
         resize_keyboard=True,
     )
@@ -366,6 +367,15 @@ def cargo_types_keyboard():
 
 
 # ─── /START ────────────────────────────────────────────────────────────────────
+async def force_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    
+    # ... logic here ...
+    # (Simplified for example, ensure ADMIN_IDS loops are implemented in relevant pay functions)
+    pass
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     existing = get_user(user.id)
@@ -452,6 +462,17 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=cargo_types_keyboard(),
         )
         return ADD_ORDER_CARGO
+
+    elif "Bot xatoliklari" in text:
+        await update.message.reply_text(
+            "🐛 *Bot xatoliklari bo'limi*\n\n"
+            "Botdan foydalanishda qanday muammo, bag yoki xatoliklarga duch keldingiz? "
+            "Iltimos, ularni batafsil yozib yuboring.\n\n"
+            "Ortga qaytish uchun 🔙 Orqaga tugmasini bosing.",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("🔙 Orqaga")]], resize_keyboard=True)
+        )
+        return BUG_REPORT
 
     elif "tahrirlash" in text:
         u = get_user(update.effective_user.id)
@@ -721,25 +742,30 @@ async def await_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             from telegram import Bot as TgBot
             admin_bot = TgBot(token=ADMIN_BOT_TOKEN)
-            await admin_bot.send_message(
-                chat_id=ADMIN_ID,
-                text=payment_text,
-                parse_mode="Markdown",
-                reply_markup=confirm_btn,
-            )
+            for admin_id in ADMIN_IDS:
+                try:
+                    await admin_bot.send_message(
+                        chat_id=admin_id,
+                        text=payment_text,
+                        parse_mode="Markdown",
+                        reply_markup=confirm_btn,
+                    )
+                except Exception as e:
+                    logger.error(f"Tasdiqlash botiga xabar yuborishda xatolik ({admin_id}): {e}")
         except Exception as e:
-            logger.error(f"Tasdiqlash botiga xabar yuborishda xatolik: {e}")
-    elif ADMIN_ID:
-        # Agar admin bot tokeni yo'q bo'lsa, asosiy bot orqali adminga yuboramiz
-        try:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=payment_text,
-                parse_mode="Markdown",
-                reply_markup=confirm_btn,
-            )
-        except Exception as e:
-            logger.error(f"Admin ga xabar yuborishda xatolik: {e}")
+            logger.error(f"Admin bot ulanishida xatolik: {e}")
+    else:
+        # Agar admin bot tokeni yo'q bo'lsa, asosiy bot orqali adminlarga yuboramiz
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=payment_text,
+                    parse_mode="Markdown",
+                    reply_markup=confirm_btn,
+                )
+            except Exception as e:
+                logger.error(f"Admin ga xabar yuborishda xatolik ({admin_id}): {e}")
 
     await update.message.reply_text(
         "⏳ *To'lovingiz tekshirilmoqda...*\n\n"
@@ -1214,6 +1240,38 @@ async def add_order_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MAIN_MENU
 
 
+async def bug_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    u = get_user(update.effective_user.id)
+    if "Orqaga" in text:
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        return MAIN_MENU
+
+    # Xatoni adminlarga yuboramiz
+    user_info = f"ID: {update.effective_user.id}"
+    if u:
+        user_info += f", Rol: {u['role']}, Tel: {u['phone']}"
+    
+    msg_to_admin = (
+        f"🚨 *Bot-muammolari:*\n\n"
+        f"👤 Foydalanuvchi ({user_info}) xabar qoldirdi:\n\n"
+        f"{text}"
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=msg_to_admin, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Adminga xatolik haqida yuborishda muammo: {e}")
+
+    kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+    await update.message.reply_text(
+        "✅ Rahmat! Sizning xabaringiz tizim administratorlariga yuborildi. Tez orada ko'rib chiqamiz.",
+        reply_markup=kb
+    )
+    return MAIN_MENU
+
+
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❓ Tushunmadim. /start bosing yoki tugmalardan birini tanlang.")
 
@@ -1254,6 +1312,7 @@ def main():
             EDIT_CARGO:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_cargo)],
             EDIT_ROLE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_role)],
             ADD_ORDER_CARGO:[MessageHandler(filters.TEXT & ~filters.COMMAND, add_order_cargo)],
+            BUG_REPORT:     [MessageHandler(filters.TEXT & ~filters.COMMAND, bug_report_handler)],
         },
         fallbacks=[
             CommandHandler("start", start),

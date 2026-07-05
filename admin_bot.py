@@ -33,7 +33,7 @@ ADMIN_BOT_TOKEN = "8939855367:AAEWex_skRAjKhHQbD95R3E6COp6Q6AQkLQ"
 # Asosiy botning tokeni (foydalanuvchilarga xabar yuborish uchun)
 MAIN_BOT_TOKEN = "8841015797:AAGyauWuYzItmfRfy7QwUSj0PCw1WKSyVPo"
 
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "8175344606"))
+ADMIN_IDS = [8175344606, 5611922080, 1277637813]
 PAYMENT_AMOUNT = 50_000
 WAITING_REJECT_REASON = {}
 
@@ -115,7 +115,7 @@ def delete_user_order(user_id):
 
 # ─── /START ────────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ Bu bot faqat admin (shoxa_0001) uchun. Siz foydalana olmaysiz.")
         return
     await update.message.reply_text(
@@ -128,7 +128,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def reject_others(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ Kechirasiz, bu yopiq bot. Undan faqat tizim administratori foydalana oladi.")
 
 
@@ -137,7 +137,7 @@ async def payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS:
         await query.answer("❌ Sizda ruxsat yo'q!", show_alert=True)
         return
 
@@ -262,7 +262,7 @@ async def payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif action == "pay_no":
-        WAITING_REJECT_REASON[ADMIN_ID] = {"pay_id": pay_id, "payer_id": payer_id}
+        WAITING_REJECT_REASON[update.effective_user.id] = {"pay_id": pay_id, "payer_id": payer_id}
         skip_kb = InlineKeyboardMarkup([[InlineKeyboardButton("O'tkazib yuborish", callback_data=f"skip_reason|{pay_id}")]])
         await query.edit_message_text(
             f"❌ To'lov #{pay_id} ni rad etyapsiz.\n\n"
@@ -285,14 +285,14 @@ async def send_rejection_to_user(payer_id, reason):
             f"❌ *Uzur so'raymiz, admin to'lovni tasdiqlamadi!*\n\n"
             f"❗️ *Sabab:* {reason}\n\n"
             f"Siz aynan bizning karta raqamimizga naqd {PAYMENT_AMOUNT:,} UZS o'tkazganingizga ishonch hosil qiling.\n"
-            f"💳 Karta: `9860 1601 3067 3512`"
+            f"💳 Karta: `9860 0801 9212 8785`"
         )
     else:
         text = (
             f"❌ *Uzur so'raymiz, admin to'lovni tasdiqlamadi.*\n\n"
             f"To'lov amalga oshirilmagan yoki to'lovda xatolik bor.\n"
             f"Siz aynan bizning karta raqamimizga naqd {PAYMENT_AMOUNT:,} UZS o'tkazganingizga ishonch hosil qiling.\n"
-            f"💳 Karta: `9860 1601 3067 3512`"
+            f"💳 Karta: `9860 0801 9212 8785`"
         )
     try:
         await main.send_message(chat_id=payer_id, text=text, parse_mode="Markdown", reply_markup=retry_kb)
@@ -301,7 +301,7 @@ async def send_rejection_to_user(payer_id, reason):
 
 async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = update.effective_user.id
-    if admin_id != ADMIN_ID:
+    if admin_id not in ADMIN_IDS:
         await update.message.reply_text("❌ Kechirasiz, bu yopiq bot. Undan faqat tizim administratori foydalana oladi.")
         return
 
@@ -322,9 +322,10 @@ async def skip_reason_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     parts = query.data.split("|")
     pay_id = int(parts[1])
+    admin_id = update.effective_user.id
     
-    if ADMIN_ID in WAITING_REJECT_REASON:
-        state = WAITING_REJECT_REASON.pop(ADMIN_ID)
+    if admin_id in WAITING_REJECT_REASON:
+        state = WAITING_REJECT_REASON.pop(admin_id)
         payer_id = state["payer_id"]
         
         await send_rejection_to_user(payer_id, None)
