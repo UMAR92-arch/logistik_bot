@@ -56,7 +56,8 @@ logger = logging.getLogger(__name__)
     ADD_ORDER_CARGO,       # 15  — qo'shimcha buyurtma qo'shish (yuk turi)
     EDIT_ROLE,             # 16  — rolni tahrirlash
     BUG_REPORT,            # 17  — bot xatoliklarini yozish
-) = range(1, 18)
+    BUG_REPORT_CONFIRM,    # 18  — bot xatoliklarini yuborishni tasdiqlash
+) = range(1, 19)
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
 DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:kMhzsVPUhELJnKadPEDacSVCMxcegXWz@postgres.railway.internal:5432/railway")
@@ -1248,28 +1249,67 @@ async def bug_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
         return MAIN_MENU
 
-    # Xatoni adminlarga yuboramiz
-    user_info = f"ID: {update.effective_user.id}"
-    if u:
-        user_info += f", Rol: {u['role']}, Tel: {u['phone']}"
-    
-    msg_to_admin = (
-        f"🚨 *Bot-muammolari:*\n\n"
-        f"👤 Foydalanuvchi ({user_info}) xabar qoldirdi:\n\n"
-        f"{text}"
-    )
-    for admin_id in ADMIN_IDS:
-        try:
-            await context.bot.send_message(chat_id=admin_id, text=msg_to_admin, parse_mode="Markdown")
-        except Exception as e:
-            logger.error(f"Adminga xatolik haqida yuborishda muammo: {e}")
+    # Matnni saqlab qo'yamiz va tasdiq so'raymiz
+    context.user_data["bug_text"] = text
 
-    kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
     await update.message.reply_text(
-        "✅ Rahmat! Sizning xabaringiz tizim administratorlariga yuborildi. Tez orada ko'rib chiqamiz.",
-        reply_markup=kb
+        "Aytgan gaplaringizni rostdan ham adminga yuborishni xohlaysizmi?",
+        reply_markup=ReplyKeyboardMarkup(
+            [
+                [KeyboardButton("✅ Ha, yuborish")],
+                [KeyboardButton("❌ Yo'q, qaytadan yozish")],
+                [KeyboardButton("🔙 Orqaga")],
+            ],
+            resize_keyboard=True
+        )
     )
-    return MAIN_MENU
+    return BUG_REPORT_CONFIRM
+
+
+async def bug_report_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    u = get_user(update.effective_user.id)
+    
+    if "Orqaga" in text:
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        return MAIN_MENU
+    
+    if "Yo'q" in text:
+        await update.message.reply_text(
+            "Iltimos, muammoni qaytadan batafsil yozib yuboring:",
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("🔙 Orqaga")]], resize_keyboard=True)
+        )
+        return BUG_REPORT
+        
+    if "Ha" in text:
+        bug_text = context.user_data.get("bug_text", "Noma'lum xatolik")
+        
+        # Xatoni adminlarga yuboramiz
+        user_info = f"ID: {update.effective_user.id}"
+        if u:
+            user_info += f", Rol: {u['role']}, Tel: {u['phone']}"
+        
+        msg_to_admin = (
+            f"🚨 *Bot-muammolari:*\n\n"
+            f"👤 Foydalanuvchi ({user_info}) xabar qoldirdi:\n\n"
+            f"{bug_text}"
+        )
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(chat_id=admin_id, text=msg_to_admin, parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Adminga xatolik haqida yuborishda muammo: {e}")
+
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text(
+            "✅ Rahmat! Sizning xabaringiz tizim administratorlariga yuborildi. Tez orada ko'rib chiqamiz.",
+            reply_markup=kb
+        )
+        return MAIN_MENU
+        
+    await update.message.reply_text("❗ Iltimos, tugmalardan birini tanlang.")
+    return BUG_REPORT_CONFIRM
 
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1313,6 +1353,7 @@ def main():
             EDIT_ROLE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_role)],
             ADD_ORDER_CARGO:[MessageHandler(filters.TEXT & ~filters.COMMAND, add_order_cargo)],
             BUG_REPORT:     [MessageHandler(filters.TEXT & ~filters.COMMAND, bug_report_handler)],
+            BUG_REPORT_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, bug_report_confirm_handler)],
         },
         fallbacks=[
             CommandHandler("start", start),
