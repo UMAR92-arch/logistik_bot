@@ -1288,22 +1288,33 @@ async def bug_report_confirm_handler(update: Update, context: ContextTypes.DEFAU
         
     if "Ha" in text:
         bug_text = context.user_data.get("bug_text", "Noma'lum xatolik")
-        
-        # Xatoni adminlarga yuboramiz
-        user_info = f"ID: {update.effective_user.id}"
-        if u:
-            user_info += f", Rol: {u['role']}, Tel: {u['phone']}"
-        
+
+        # Foydalanuvchi ma'lumotlari
+        tg_user = update.effective_user
+        full_name = u["full_name"] if u else (tg_user.full_name or "Noma'lum")
+        phone    = u["phone"]     if u else "Kiritilmagan"
+        role_lbl = ("📦 Buyurtma beruvchi" if u["role"] == "employer" else "🚚 Buyurtma oluvchi") if u else "Ro'yxatdan o'tmagan"
+
         msg_to_admin = (
             f"🚨 *Bot-muammolari:*\n\n"
-            f"👤 Foydalanuvchi ({user_info}) xabar qoldirdi:\n\n"
-            f"{bug_text}"
+            f"👤 *Ism:* {full_name}\n"
+            f"📞 *Tel:* {phone}\n"
+            f"🏷️ *Rol:* {role_lbl}\n"
+            f"🆔 *Telegram ID:* `{tg_user.id}`\n\n"
+            f"📝 *Muammo:*\n{bug_text}"
         )
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(chat_id=admin_id, text=msg_to_admin, parse_mode="Markdown")
-            except Exception as e:
-                logger.error(f"Adminga xatolik haqida yuborishda muammo: {e}")
+
+        # Tasdiqlash botiga (ADMIN_BOT_TOKEN) yuboramiz
+        try:
+            from telegram import Bot as TgBot
+            admin_bot = TgBot(token=ADMIN_BOT_TOKEN)
+            for admin_id in ADMIN_IDS:
+                try:
+                    await admin_bot.send_message(chat_id=admin_id, text=msg_to_admin, parse_mode="Markdown")
+                except Exception as e:
+                    logger.error(f"Tasdiqlash botiga bug report yuborishda xatolik ({admin_id}): {e}")
+        except Exception as e:
+            logger.error(f"Admin bot ulanishida xatolik: {e}")
 
         kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
         await update.message.reply_text(
