@@ -274,8 +274,12 @@ async def payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── FOYDALANUVCHI: "ISH TUGATDINGIZMI?" JAVOBLARI ───────────────────────────
 async def send_rejection_to_user(payer_id, reason):
-    from telegram import Bot
+    from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
     main = Bot(token=MAIN_BOT_TOKEN)
+    retry_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Qayta urinish", callback_data=f"retry_payment|{payer_id}"),
+        InlineKeyboardButton("🔙 Orqaga qaytish", callback_data=f"back_to_menu|{payer_id}"),
+    ]])
     if reason:
         text = (
             f"❌ *Uzur so'raymiz, admin to'lovni tasdiqlamadi!*\n\n"
@@ -291,7 +295,7 @@ async def send_rejection_to_user(payer_id, reason):
             f"💳 Karta: `9860 1601 3067 3512`"
         )
     try:
-        await main.send_message(chat_id=payer_id, text=text, parse_mode="Markdown")
+        await main.send_message(chat_id=payer_id, text=text, parse_mode="Markdown", reply_markup=retry_kb)
     except Exception as e:
         logger.error(f"Xatolik: {e}")
 

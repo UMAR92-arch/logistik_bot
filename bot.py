@@ -120,6 +120,10 @@ def init_db():
             run_query("ALTER TABLE users ADD COLUMN cargo_type VARCHAR(255)")
         except Exception:
             pass
+        try:
+            run_query("ALTER TABLE users ADD COLUMN free_limits INTEGER DEFAULT 0")
+        except Exception:
+            pass
         run_query("""
             CREATE TABLE IF NOT EXISTS payments (
                 id          SERIAL PRIMARY KEY,
@@ -155,6 +159,10 @@ def init_db():
         """)
         try:
             run_query("ALTER TABLE users ADD COLUMN cargo_type TEXT")
+        except Exception:
+            pass
+        try:
+            run_query("ALTER TABLE users ADD COLUMN free_limits INTEGER DEFAULT 0")
         except Exception:
             pass
         run_query("""
@@ -250,6 +258,21 @@ def delete_user_order(user_id):
     """Foydalanuvchi buyurtmasini (users va wait_list) o'chiradi."""
     run_query("DELETE FROM users WHERE user_id=?", (user_id,))
     run_query("DELETE FROM wait_list WHERE user_id=?", (user_id,))
+
+
+def get_free_limits(user_id):
+    row = run_query("SELECT free_limits FROM users WHERE user_id=?", (user_id,), fetch=True)
+    return row[0] if row else 0
+
+
+def use_free_limit(user_id):
+    """Limitni 1 taga kamaytiradi."""
+    run_query("UPDATE users SET free_limits = free_limits - 1 WHERE user_id=?", (user_id,))
+
+
+def add_free_limit(user_id):
+    """Limitni 1 taga oshiradi."""
+    run_query("UPDATE users SET free_limits = free_limits + 1 WHERE user_id=?", (user_id,))
 
 
 async def notify_waitlist(context: ContextTypes.DEFAULT_TYPE, new_user_role: str, cargo_type: str):
@@ -354,7 +377,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📝 *Buyurtma berish bo'limi*\n\nBir nechta savol beramiz.\n\n"
             "1️⃣ Ismingiz va familiyangizni kiriting:",
-            reply_markup=ReplyKeyboardRemove(),
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("🔙 Orqaga")]], resize_keyboard=True),
             parse_mode="Markdown",
         )
         return EMPLOYER_NAME
@@ -363,7 +386,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📝 *Buyurtma olish bo'limi*\n\nBir nechta savol beramiz.\n\n"
             "1️⃣ Ismingiz va familiyangizni kiriting:",
-            reply_markup=ReplyKeyboardRemove(),
+            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("🔙 Orqaga")]], resize_keyboard=True),
             parse_mode="Markdown",
         )
         return WORKER_NAME
@@ -441,6 +464,14 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def search_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cargo_type = update.message.text.strip()
+
+    # Orqaga tugmasi
+    if "Orqaga" in cargo_type:
+        u = get_user(update.effective_user.id)
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        return MAIN_MENU
+
     u = get_user(update.effective_user.id)
     if not u:
         await update.message.reply_text("❌ Siz hali ro'yxatdan o'tmagansiz. /start bosing.")
@@ -449,7 +480,7 @@ async def search_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = search_opposite(u["role"], cargo_type)
     opposite_label = "Buyurtma oluvchi (haydovchi)" if u["role"] == "employer" else "Buyurtma beruvchi (shipper)"
     opposite_label_short = "buyurtma oluvchi" if u["role"] == "employer" else "buyurtma beruvchi"
-    
+
     if not results:
         target_role = "worker" if u["role"] == "employer" else "employer"
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -471,12 +502,36 @@ async def search_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return MAIN_MENU
 
-    # Topildi — to'lov talab qilamiz
+    # Topildi
     target = results[0]
     target_id = target[0]
     context.user_data["target_id"] = target_id
     context.user_data["target_cargo"] = cargo_type
+    context.user_data["searching_as"] = u["role"]
 
+    # ── Bepul limit bormi? ──
+    free = get_free_limits(u["user_id"])
+    if free > 0:
+        use_free_limit(u["user_id"])
+        target_user = get_user(target_id)
+        if target_user:
+            uname = f"@{target_user['username']}" if target_user.get("username") else "Telegram username yo'q"
+            await update.message.reply_text(
+                f"🎁 *Sizda bepul limit bor edi — foydalandingiz!*\n\n"
+                f"🎉 *{opposite_label} ma'lumotlari:*\n\n"
+                f"👤 Ism: *{target_user['full_name']}*\n"
+                f"📞 Telefon: `{target_user['phone']}`\n"
+                f"📦 Yuk turi: {target_user.get('cargo_type', 'Kiritilmagan')}\n"
+                f"🔗 Telegram: {uname}\n\n"
+                f"Muvaffaqiyatli hamkorlik tilaymiz! 🤝",
+                parse_mode="Markdown",
+                reply_markup=after_register_keyboard(u["role"]),
+            )
+        else:
+            await update.message.reply_text("❌ Foydalanuvchi topilmadi.", reply_markup=after_register_keyboard(u["role"]))
+        return MAIN_MENU
+
+    # To'lov talab qilamiz
     await update.message.reply_text(
         f"✅ *{cargo_type} bo'yicha {opposite_label} topildi!*\n\n"
         f"Uning to'liq ma'lumotlarini olish uchun botga to'lov qiling.\n\n"
@@ -493,13 +548,28 @@ async def search_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ═══ BUYURTMA BERISH (EMPLOYER) ═════════════════════════════════════════════════════
 async def employer_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["emp_name"] = update.message.text.strip()
-    await update.message.reply_text("2️⃣ Telefon raqamingizni kiriting (masalan: +998901234567):")
+    text = update.message.text.strip()
+    if "Orqaga" in text:
+        u = get_user(update.effective_user.id)
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        return MAIN_MENU
+    context.user_data["emp_name"] = text
+    await update.message.reply_text(
+        "2️⃣ Telefon raqamingizni kiriting (masalan: +998901234567):",
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("🔙 Orqaga")]], resize_keyboard=True),
+    )
     return EMPLOYER_PHONE
 
 
 async def employer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["emp_phone"] = update.message.text.strip()
+    text = update.message.text.strip()
+    if "Orqaga" in text:
+        u = get_user(update.effective_user.id)
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        return MAIN_MENU
+    context.user_data["emp_phone"] = text
     await update.message.reply_text(
         "3️⃣ Asosan qaysi turdagi yuklarni berasiz? (Quyidagilardan birini tanlang):",
         reply_markup=cargo_types_keyboard(),
@@ -530,13 +600,28 @@ async def employer_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ═══ BUYURTMA OLISH (WORKER) ════════════════════════════════════════════════════════
 async def worker_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["wrk_name"] = update.message.text.strip()
-    await update.message.reply_text("2️⃣ Telefon raqamingizni kiriting (masalan: +998901234567):")
+    text = update.message.text.strip()
+    if "Orqaga" in text:
+        u = get_user(update.effective_user.id)
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        return MAIN_MENU
+    context.user_data["wrk_name"] = text
+    await update.message.reply_text(
+        "2️⃣ Telefon raqamingizni kiriting (masalan: +998901234567):",
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("🔙 Orqaga")]], resize_keyboard=True),
+    )
     return WORKER_PHONE
 
 
 async def worker_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["wrk_phone"] = update.message.text.strip()
+    text = update.message.text.strip()
+    if "Orqaga" in text:
+        u = get_user(update.effective_user.id)
+        kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+        await update.message.reply_text("🔙 Orqaga qaytdingiz.", reply_markup=kb)
+        return MAIN_MENU
+    context.user_data["wrk_phone"] = text
     await update.message.reply_text(
         "3️⃣ Asosan qaysi turdagi yuklarni yetkazib berasiz? (Quyidagilardan birini tanlang):",
         reply_markup=cargo_types_keyboard(),
@@ -816,29 +901,19 @@ async def finish_no_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     payment = get_payment(pay_id)
     payer_id = payment["payer_id"] if payment else None
 
+    # "Yo'q" deb bosgan payer ga bepul limit beramiz
+    if who == "payer" and payer_id:
+        add_free_limit(payer_id)
+
     await query.edit_message_text(
         "✅ *Tushunarli!*\n\n"
         "Sizning buyurtmangiz bazada saqlanib qoldi.\n\n"
+        "🎁 *Bonus:* Keyingi safar qidirib topganingizda *1 ta bepul limit* berildi! "
+        "Ya'ni qayta to'lov qilmasdan bir marta kontakt olishingiz mumkin.\n\n"
         "Xuddi shunga o'xshash buyurtma kimdan kelib qolsa, "
-        "biz sizni tavsiya etamiz va yana xabardor qilamiz. 🔔\n\n"
-        "Botdan davom etish uchun /start bosing.",
+        "biz sizni tavsiya etamiz va yana xabardor qilamiz. 🔔",
         parse_mode="Markdown",
     )
-
-    if who == "payer" and payer_id:
-        try:
-            await context.bot.send_message(
-                chat_id=payer_id,
-                text=(
-                    "ℹ️ *Ma'lumot:*\n\n"
-                    "Siz botga to'lov qilib qo'ygansiz, shuning uchun endi sizda *1 ta limit* bor. "
-                    "Faqat bitta buyurtmachi yoki buyurtma oluvchi haqidagi ma'lumotni olishingiz mumkin. "
-                    "Agar keyinchalik yana boshqa hamkor qidirmoqchi bo'lsangiz, qayta to'lov qilishingiz kerak bo'ladi."
-                ),
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.error(f"Limit xabari yuborishda xatolik: {e}")
 
 
 async def delete_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -876,8 +951,45 @@ async def delete_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         )
 
 
+# ═══ QAYTA URINISH / ORQAGA QAYTISH (TO'LOV RAD ETILGANDA) ════════════════════
+async def retry_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    u = get_user(update.effective_user.id)
+    if not u:
+        await query.edit_message_text("❌ Profil topilmadi. /start bosing.")
+        return
+    target_id = context.user_data.get("target_id")
+    if not target_id:
+        await query.edit_message_text(
+            "⚠️ Qidiruvni qayta boshlash uchun menyudan *Qidirish* tugmasini bosing.",
+            parse_mode="Markdown",
+        )
+        return
+    await query.edit_message_text(
+        f"💳 *To'lovni qayta amalga oshirish:*\n\n"
+        f"💳 *Karta raqami:* `{PAYMENT_CARD}`\n"
+        f"💵 *Miqdor:* {PAYMENT_AMOUNT:,} UZS\n\n"
+        f"❗ Kartaga to'lovni o'tkazgach, *karta raqamingizda yozilgan ism va familiyangizni* yozing.\n"
+        f"_(Masalan: Alisher Karimov)_",
+        parse_mode="Markdown",
+    )
 
-# ═══ TAHRIRLASH ════════════════════════════════════════════════════════════════
+
+async def back_to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    u = get_user(update.effective_user.id)
+    kb = after_register_keyboard(u["role"]) if u else main_menu_keyboard()
+    await query.edit_message_text("🔙 Orqaga qaytdingiz. Menyudan kerakli bo'limni tanlang.")
+    await context.bot.send_message(
+        chat_id=update.effective_user.id,
+        text="👇 Menyudan tanlang:",
+        reply_markup=kb,
+    )
+
+
+
 async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if "Ism" in text or "Familiya" in text:
@@ -1054,6 +1166,8 @@ def main():
     app.add_handler(CallbackQueryHandler(finish_yes_callback,    pattern=r"^finish_yes\|\d+\|(payer|target)$"))
     app.add_handler(CallbackQueryHandler(finish_no_callback,     pattern=r"^finish_no\|\d+\|(payer|target)$"))
     app.add_handler(CallbackQueryHandler(delete_confirm_callback, pattern=r"^del_(confirm|cancel)\|\d+\|(payer|target)$"))
+    app.add_handler(CallbackQueryHandler(retry_payment_callback,  pattern=r"^retry_payment\|\d+$"))
+    app.add_handler(CallbackQueryHandler(back_to_menu_callback,   pattern=r"^back_to_menu\|\d+$"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
