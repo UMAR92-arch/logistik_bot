@@ -1189,73 +1189,29 @@ async def add_order_cargo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chosen_role = u["role"]
 
-    # Avval bazada shu yuk turi bo'yicha mos foydalanuvchi borligini tekshiramiz
-    results = search_opposite(chosen_role, cargo_type)
-    opposite_label = "Buyurtma oluvchi (haydovchi)" if chosen_role == "employer" else "Buyurtma beruvchi (shipper)"
-    opposite_label_short = "buyurtma oluvchi" if chosen_role == "employer" else "buyurtma beruvchi"
-
-    if results:
-        # Topildi — bepul limitni tekshiramiz
-        target = results[0]
-        target_id = target[0]
-        context.user_data["target_id"] = target_id
-        context.user_data["target_cargo"] = cargo_type
-        context.user_data["searching_as"] = chosen_role
-
-        free = get_free_limits(u["user_id"])
-        if free > 0:
-            use_free_limit(u["user_id"])
-            target_user = get_user(target_id)
-            if target_user:
-                uname = f"@{target_user['username']}" if target_user.get("username") else "Telegram username yo'q"
-                await update.message.reply_text(
-                    f"🎁 *Sizda bepul limit bor edi — foydalandingiz!*\n\n"
-                    f"🎉 *{opposite_label} ma'lumotlari:*\n\n"
-                    f"👤 Ism: *{target_user['full_name']}*\n"
-                    f"📞 Telefon: `{target_user['phone']}`\n"
-                    f"📦 Yuk turi: {target_user.get('cargo_type', 'Kiritilmagan')}\n"
-                    f"🔗 Telegram: {uname}\n\n"
-                    f"Muvaffaqiyatli hamkorlik tilaymiz! 🤝",
-                    parse_mode="Markdown",
-                    reply_markup=after_register_keyboard(u["role"]),
-                )
-            else:
-                await update.message.reply_text("❌ Foydalanuvchi topilmadi.", reply_markup=after_register_keyboard(u["role"]))
-            return MAIN_MENU
-        await update.message.reply_text(
-            f"✅ *{cargo_type} bo'yicha {opposite_label} topildi!*\n\n"
-            f"Uning to'liq ma'lumotlarini olish uchun botga to'lov qiling.\n\n"
-            f"💳 *To'lov miqdori:* {PAYMENT_AMOUNT:,} UZS\n"
-            f"💳 *Karta raqami:* `{PAYMENT_CARD}`\n\n"
-            f"❗ *Iltimos:*\n"
-            f"1. Yuqoridagi kartaga *naqd {PAYMENT_AMOUNT:,} UZS* o'tkazing\n"
-            f"2. To'lovni amalga oshirgach, *karta raqamingizda yozilgan ism va familiyangizni* yozing\n\n"
-            f"_(Masalan: Alisher Karimov)_",
-            parse_mode="Markdown",
-            reply_markup=ReplyKeyboardRemove(),
+    # To'g'ridan to'g'ri kutish ro'yxatiga qo'shamiz
+    target_role = "worker" if chosen_role == "employer" else "employer"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    existing_wait = run_query(
+        "SELECT id FROM wait_list WHERE user_id=? AND target_role=? AND cargo_type=?",
+        (u["user_id"], target_role, cargo_type), fetch=True
+    )
+    if not existing_wait:
+        run_query(
+            "INSERT INTO wait_list (user_id, target_role, cargo_type, created_at) VALUES (?,?,?,?)",
+            (u["user_id"], target_role, cargo_type, now)
         )
-        return AWAIT_PAYMENT
-    else:
-        # Topilmadi — kutish ro'yxatiga qo'shamiz
-        target_role = "worker" if chosen_role == "employer" else "employer"
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        existing_wait = run_query(
-            "SELECT id FROM wait_list WHERE user_id=? AND target_role=? AND cargo_type=?",
-            (u["user_id"], target_role, cargo_type), fetch=True
-        )
-        if not existing_wait:
-            run_query(
-                "INSERT INTO wait_list (user_id, target_role, cargo_type, created_at) VALUES (?,?,?,?)",
-                (u["user_id"], target_role, cargo_type, now)
-            )
-        await update.message.reply_text(
-            f"😔 Hozirda *{cargo_type}* turdagi yuk bo'yicha hech qanday *{opposite_label}* topilmadi.\n\n"
-            f"✅ *Xavotir olmang!* Buyurtmangiz ro'yxatga qo'shildi.\n"
-            f"Siz qidirgandek *{opposite_label_short}* botda ro'yxatdan o'tishi bilanoq sizga darhol xabar beramiz! 🔔",
-            parse_mode="Markdown",
-            reply_markup=after_register_keyboard(u["role"]),
-        )
-        return MAIN_MENU
+        
+    opposite_label = "buyurtma oluvchi" if chosen_role == "employer" else "buyurtma beruvchi"
+    await update.message.reply_text(
+        f"✅ *Yangi buyurtmangiz qabul qilindi!*\n\n"
+        f"Sizning *{cargo_type}* turdagi yulingiz bazaga qo'shildi.\n"
+        f"Unga mos *{opposite_label}* topishimiz bilanoq sizga aytamiz! 🔔",
+        parse_mode="Markdown",
+        reply_markup=after_register_keyboard(u["role"]),
+    )
+    return MAIN_MENU
 
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
